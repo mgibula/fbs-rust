@@ -111,11 +111,16 @@ impl IoUring {
         unsafe { io_uring_submit(&mut self.ring) }
     }
 
-    pub fn get_sqe(&mut self) -> IoUringSQE {
+    pub fn get_sqe(&mut self) -> Option<IoUringSQE> {
         unsafe {
-            IoUringSQE {
-                sqe: io_uring_get_sqe(&mut self.ring),
+            let ptr = io_uring_get_sqe(&mut self.ring);
+            if !ptr.is_null() {
+                Some(IoUringSQE {
+                    sqe: ptr,
+                });
             }
+
+            return None;
         }
     }
 
