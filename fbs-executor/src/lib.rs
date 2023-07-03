@@ -1,6 +1,5 @@
-pub fn add(left: usize, right: usize) -> usize {
-    left + right
-}
+pub mod runtime;
+pub mod misc;
 
 #[cfg(test)]
 mod tests {
@@ -8,7 +7,10 @@ mod tests {
 
     #[test]
     fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
+        let a = 123;
+        let b = 12323;
+        runtime::test_async(async move {
+            println!("test {} {}", a, b);
+        });
     }
 }
