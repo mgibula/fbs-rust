@@ -1,9 +1,12 @@
 #![allow(nonstandard_style)]
 #![allow(improper_ctypes)]
 use libc::statx;
+use libc::__u8;
 use libc::__u16;
 use libc::__u32;
 use libc::__u64;
+use libc::__s32;
+use libc::__s64;
 use libc::mode_t;
 use libc::epoll_event;
 use libc::open_how;
