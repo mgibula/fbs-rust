@@ -1,14 +1,20 @@
-pub fn add(left: usize, right: usize) -> usize {
-    left + right
-}
+#![allow(nonstandard_style)]
+#![allow(improper_ctypes)]
+use libc::statx;
+use libc::__u16;
+use libc::__u32;
+use libc::__u64;
+use libc::mode_t;
+use libc::epoll_event;
+use libc::open_how;
+use libc::msghdr;
+use libc::cmsghdr;
+use libc::socklen_t;
+use libc::sockaddr;
+use libc::off_t;
+use libc::iovec;
+use libc::sigset_t;
+use libc::cpu_set_t;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
