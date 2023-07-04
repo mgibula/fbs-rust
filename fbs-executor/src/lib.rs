@@ -1,5 +1,6 @@
 pub mod runtime;
 pub mod misc;
+pub mod waker;
 
 #[cfg(test)]
 mod tests {
@@ -9,8 +10,6 @@ mod tests {
     fn it_works() {
         let a = 123;
         let b = 12323;
-        runtime::test_async(async move {
-            println!("test {} {}", a, b);
-        });
+
     }
 }

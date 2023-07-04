@@ -34,6 +34,16 @@ impl<T> IndexedList<T> {
         }
     }
 
+    pub fn allocate(&mut self) -> usize {
+        match self.free_entries.pop() {
+            Some(i) => i,
+            None => {
+                self.entries.push(None);
+                self.entries.len() - 1
+            }
+        }
+    }
+
     pub fn get(&self, index: usize) -> Option<&T> {
         if index >= self.entries.len() {
             return None;
