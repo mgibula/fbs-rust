@@ -6,6 +6,13 @@ pub struct IndexedList<T> {
 }
 
 impl<T> IndexedList<T> {
+    pub fn new() -> Self {
+        IndexedList {
+            entries: vec![],
+            free_entries: vec![],
+        }
+    }
+
     pub fn insert(&mut self, value: T) -> usize {
         let index = match self.free_entries.pop() {
             Some(i) => i,
@@ -42,6 +49,19 @@ impl<T> IndexedList<T> {
                 self.entries.len() - 1
             }
         }
+    }
+
+    pub fn insert_at(&mut self, index: usize, value: T) -> bool {
+        if index >= self.entries.len() {
+            return false;
+        }
+
+        if let Some(_) = self.entries[index] {
+            return false;
+        }
+
+        self.entries[index] = Some(value);
+        true
     }
 
     pub fn get(&self, index: usize) -> Option<&T> {
