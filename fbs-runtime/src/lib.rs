@@ -1,11 +1,7 @@
 use std::future::Future;
 use std::cell::RefCell;
 
-use crate::executor_frontend::Yield;
-
-use super::TaskHandle;
-use super::Executor;
-use super::ExecutorFrontend;
+use fbs_executor::*;
 
 thread_local! {
     static EXECUTOR: RefCell<Executor> = RefCell::new(Executor::new());

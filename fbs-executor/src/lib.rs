@@ -7,14 +7,13 @@ use std::future::Future;
 use misc::channel::{ChannelTx, ChannelRx, channel_create};
 use misc::indexed_list::IndexedList;
 
-mod runtime;
 mod misc;
 mod task_data;
 mod executor_frontend;
 mod executor;
 mod task_handle;
 
-pub use runtime::*;
+pub use executor_frontend::Yield;
 
 pub struct TaskHandle<T> {
     task: Rc<RefCell<TaskData<T>>>,
@@ -25,13 +24,13 @@ enum ExecutorCmd {
     Wake(Waker),
 }
 
-struct Executor {
+pub struct Executor {
     ready: LinkedList<Rc<RefCell<dyn Task>>>,
     waiting: IndexedList<Rc<RefCell<dyn Task>>>,
     channel: ChannelRx<ExecutorCmd>,
 }
 
-struct ExecutorFrontend {
+pub struct ExecutorFrontend {
     channel: ChannelTx<ExecutorCmd>,
 }
 

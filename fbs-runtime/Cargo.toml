@@ -1,0 +1,7 @@
+[package]
+name = "fbs-runtime"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+fbs-executor = { path = "../fbs-executor" }
