@@ -2,8 +2,8 @@ use std::rc::Rc;
 use std::cell::RefCell;
 use std::task::{Waker, RawWaker, RawWakerVTable};
 
-use crate::runtime::TaskData;
-use crate::runtime::ExecutorCmd;
+use super::TaskData;
+use super::ExecutorCmd;
 
 fn create_vtable<T: 'static>() -> &'static RawWakerVTable {
     unsafe {
@@ -40,7 +40,7 @@ fn waker_drop<T: 'static>(s: &RefCell<TaskData<T>>) {
     drop(rc);
 }
 
-pub fn task_into_waker<T: 'static>(s: *const RefCell<TaskData<T>>) -> Waker {
+pub(super) fn task_into_waker<T: 'static>(s: *const RefCell<TaskData<T>>) -> Waker {
     let raw_waker = RawWaker::new(s as *const (), create_vtable::<T>());
     unsafe { Waker::from_raw(raw_waker) }
 }

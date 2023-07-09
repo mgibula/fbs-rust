@@ -1,4 +1,3 @@
-
 #[derive(Debug, Default)]
 pub struct IndexedList<T> {
     entries: Vec<Option<T>>,
