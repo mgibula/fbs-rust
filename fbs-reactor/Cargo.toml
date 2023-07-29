@@ -1,0 +1,9 @@
+[package]
+name = "fbs-reactor"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+liburing-sys = { path = "../liburing-sys" }
+thiserror = "1.0.40"
+libc = "0.2.147"

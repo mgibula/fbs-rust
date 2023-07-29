@@ -45,6 +45,10 @@ impl Executor {
         }
     }
 
+    pub fn has_pending_tasks(&self) -> bool {
+        !self.ready.is_empty()
+    }
+
     fn process_queue(&mut self) {
         loop {
             let cmd = self.channel.receive();
