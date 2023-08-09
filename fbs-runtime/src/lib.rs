@@ -1,12 +1,14 @@
 use std::future::Future;
 use std::cell::RefCell;
 use std::pin::Pin;
-use std::mem::drop;
 use std::task::{Context, Poll};
 use thiserror::Error;
 
 use fbs_executor::*;
 use fbs_reactor::*;
+
+mod ops;
+pub use ops::*;
 
 #[derive(Error, Debug)]
 pub enum RuntimeError {
@@ -28,24 +30,24 @@ pub fn async_spawn<T: 'static>(future: impl Future<Output = T> + 'static) -> Tas
     })
 }
 
-#[cfg(test)]
-fn async_run_once() -> bool {
-    EXECUTOR.with(|e| {
-        e.borrow_mut().run_once()
-    })
-}
-
-#[cfg(test)]
-fn async_run_all() {
-    EXECUTOR.with(|e| {
-        e.borrow_mut().run_all();
-    })
-}
-
 pub fn async_yield() -> Yield {
     FRONTEND.with(|e| {
         e.yield_execution()
     })
+}
+
+pub fn async_run<T: 'static>(future: impl Future<Output = T> + 'static) -> T {
+    let handle = async_spawn(future);
+
+    loop {
+        local_executor_run_all();
+        let made_progress = local_reactor_process_ops();
+        if !made_progress {
+            break;
+        }
+    }
+
+    handle.result().unwrap()
 }
 
 fn local_executor_run_all() {
@@ -63,33 +65,21 @@ fn local_reactor_process_ops() -> bool {
     })
 }
 
-pub fn async_run(future: impl Future<Output = ()> + 'static) {
-    let handle = async_spawn(future);
-
-    loop {
-        local_executor_run_all();
-        let made_progress = local_reactor_process_ops();
-        if !made_progress {
-            break;
-        }
-    }
-
-    drop(handle);   // this is to extend lifetime of handle
-}
-
 pub struct AsyncOp (ReactorOp, Option<OpDescriptorPtr>);
 
 impl Future for AsyncOp {
-    type Output = IoUringCQE;
+    type Output = i32;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         match &self.1 {
+            // already scheduled
             Some(op) => {
                 match op.completed() {
                     false => Poll::Pending,
-                    true => Poll::Ready(op.get_cqe())
+                    true => Poll::Ready(op.get_cqe().result)
                 }
             },
+            // not yet scheduled
             None => {
                 let scheduled = REACTOR.with(|r| {
                     r.borrow_mut().schedule(&mut self.0, cx.waker().clone())
@@ -107,16 +97,18 @@ impl Future for AsyncOp {
     }
 }
 
-pub fn async_nop() -> AsyncOp {
-    let mut op = ReactorOp::new();
-    op.prepare_nop();
-    AsyncOp(op, None)
+#[cfg(test)]
+fn async_run_once() -> bool {
+    EXECUTOR.with(|e| {
+        e.borrow_mut().run_once()
+    })
 }
 
-pub fn async_close(fd: i32) -> AsyncOp {
-    let mut op = ReactorOp::new();
-    op.prepare_close(fd);
-    AsyncOp(op, None)
+#[cfg(test)]
+fn async_run_all() {
+    EXECUTOR.with(|e| {
+        e.borrow_mut().run_all();
+    })
 }
 
 #[cfg(test)]
@@ -159,9 +151,50 @@ mod tests {
 
     #[test]
     fn local_nop_test() {
-        async_run(async {
+        let result = async_run(async {
             let result = async_nop().await;
-            assert_eq!(result.result, 0);
+            assert_eq!(result, 0);
+
+            1
         });
+
+        // ensure it actually executed
+        assert_eq!(result, 1);
+    }
+
+    #[test]
+    fn local_openat2_test() {
+        let result = async_run(async {
+            let result = async_open("/tmp/testowy-uring.txt").await;
+            assert!(result >= 0);
+            1
+        });
+
+        // ensure it actually executed
+        assert_eq!(result, 1);
+    }
+
+    #[test]
+    fn local_close_test() {
+        let result = async_run(async {
+            let result = async_close(123).await;
+            assert_eq!(result, -libc::EBADF);
+            1
+        });
+
+        // ensure it actually executed
+        assert_eq!(result, 1);
+    }
+
+    #[test]
+    fn local_close_test2() {
+        let result = async_run(async {
+            let result = async_close(0).await;
+            assert_eq!(result, 0);
+            1
+        });
+
+        // ensure it actually executed
+        assert_eq!(result, 1);
     }
 }

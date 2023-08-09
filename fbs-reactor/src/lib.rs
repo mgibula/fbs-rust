@@ -1,8 +1,10 @@
 use std::cell::RefCell;
-use std::ops::IndexMut;
+use std::ffi::{CString, OsStr};
 use std::rc::Rc;
-use std::mem;
+use std::mem::{self, ManuallyDrop};
 use std::task::Waker;
+use std::ops::Drop;
+use std::os::unix::prelude::OsStrExt;
 
 use liburing_sys::*;
 use io_uring::*;
@@ -18,13 +20,61 @@ pub enum ReactorError {
     NoSQEAvailable,
 }
 
-pub struct ReactorOp(io_uring_sqe);
+#[repr(u8)]
+enum ReactorOpExtraParamsType {
+    None,
+    OpenAt2,
+}
+
+#[repr(C)]
+struct ReactorOpExtraParamsOpenAt2 {
+    how: libc::open_how,
+    path: CString,
+}
+
+#[repr(C)]
+union ReactorOpExtraParamsUnion {
+    openat2: mem::ManuallyDrop<ReactorOpExtraParamsOpenAt2>,
+}
+
+#[repr(C)]
+struct ReactorOpExtraParams {
+    tag: ReactorOpExtraParamsType,
+    value: ReactorOpExtraParamsUnion,
+}
+
+impl ReactorOpExtraParams {
+    fn new() -> ReactorOpExtraParams {
+        ReactorOpExtraParams {
+            tag: ReactorOpExtraParamsType::None,
+            value: unsafe { mem::zeroed() },
+        }
+    }
+}
+
+impl Drop for ReactorOpExtraParams {
+    fn drop(&mut self) {
+        unsafe {
+            match self.tag {
+                ReactorOpExtraParamsType::None => {},
+                ReactorOpExtraParamsType::OpenAt2 => {
+                    ManuallyDrop::drop(&mut self.value.openat2);
+                }
+            }
+        }
+    }
+}
+
+pub struct ReactorOp(io_uring_sqe, ReactorOpExtraParams);
 
 impl ReactorOp {
     pub fn new() -> Self {
-        let mut result : ReactorOp = unsafe { mem::zeroed() };
-        result.prepare_nop();
+        let mut result = ReactorOp {
+            0: unsafe { mem::zeroed() },
+            1: ReactorOpExtraParams::new(),
+        };
 
+        result.prepare_nop();
         result
     }
 
@@ -37,6 +87,15 @@ impl ReactorOp {
     pub fn prepare_close(&mut self, fd: i32) {
         unsafe {
             io_uring_prep_close(&mut self.0, fd)
+        }
+    }
+
+    pub fn prepare_openat2(&mut self, path: &OsStr, flags: i32, mode: u32) {
+        unsafe {
+            self.1.tag = ReactorOpExtraParamsType::OpenAt2;
+            self.1.value.openat2 = ManuallyDrop::new(ReactorOpExtraParamsOpenAt2 { how: mem::zeroed(), path: CString::new(path.as_bytes()).expect("Null character in filename") });
+
+            io_uring_prep_openat(&mut self.0, libc::AT_FDCWD, self.1.value.openat2.path.as_ptr(), flags, mode);
         }
     }
 
@@ -90,8 +149,6 @@ struct OpDescriptor {
     cqe: Option<IoUringCQE>,
     index: usize,
     waker: Waker,
-    result_is_fd: bool,
-    ts: Option<__kernel_timespec>,
 }
 
 pub struct Reactor {
@@ -137,7 +194,7 @@ impl Reactor {
         };
 
         let result = OpDescriptorPtr {
-            ptr: Rc::new(RefCell::new(OpDescriptor { sqe: self.get_sqe()?, cqe: None, result_is_fd: false, ts: None, index, waker }))
+            ptr: Rc::new(RefCell::new(OpDescriptor { sqe: self.get_sqe()?, cqe: None, index, waker }))
         };
 
         if self.ops.len() == index {

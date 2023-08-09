@@ -5,4 +5,5 @@ members = [
     "fbs-runtime",
     "fbs-reactor",
     "liburing-sys",
+    "test-sandbox",
 ]

@@ -6,8 +6,6 @@ use std::ptr;
 use liburing_sys::*;
 use thiserror::Error;
 
-use libc::{EFAULT, ENOMEM, EINVAL, EMFILE, ENFILE, EPERM};
-
 #[derive(Debug, Clone, Copy)]
 pub struct IoUringParams {
     pub sq_entries: u32,

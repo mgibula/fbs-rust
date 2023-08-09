@@ -7,3 +7,4 @@ edition = "2021"
 fbs-executor = { path = "../fbs-executor" }
 fbs-reactor = { path = "../fbs-reactor" }
 thiserror = "1.0.40"
+libc = "0.2.147"
