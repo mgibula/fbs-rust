@@ -8,6 +8,7 @@ use thiserror::Error;
 
 use libc::{EFAULT, ENOMEM, EINVAL, EMFILE, ENFILE, EPERM};
 
+#[derive(Debug, Clone, Copy)]
 pub struct IoUringParams {
     pub sq_entries: u32,
     pub cq_entries: u32,
@@ -18,11 +19,19 @@ pub struct IoUring {
     created: bool,
 }
 
+#[derive(Debug, Clone, Copy)]
 pub struct IoUringSQE {
     sqe: *mut io_uring_sqe,
 }
 
+#[derive(Debug, Clone, Copy)]
 pub struct IoUringCQE {
+    pub result: i32,
+    pub flags: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct IoUringCQEPtr {
     cqe: *mut io_uring_cqe,
 }
 
@@ -96,7 +105,7 @@ impl IoUring {
         unsafe {
             let ptr = io_uring_get_sqe(&mut self.ring);
             if !ptr.is_null() {
-                Some(IoUringSQE {
+                return Some(IoUringSQE {
                     sqe: ptr,
                 });
             }
@@ -105,23 +114,23 @@ impl IoUring {
         }
     }
 
-    pub fn peek_cqe(&mut self) -> Option<IoUringCQE> {
+    pub fn peek_cqe(&mut self) -> Option<IoUringCQEPtr> {
         unsafe {
             let mut ptr: *mut io_uring_cqe = ptr::null_mut();
             let result = io_uring_peek_cqe(&mut self.ring, &mut ptr);
             match result {
-                0 => Some(IoUringCQE { cqe: ptr }),
+                0 => Some(IoUringCQEPtr { cqe: ptr }),
                 _ => None,
             }
         }
     }
 
-    pub fn wait_cqe(&mut self) -> Result<IoUringCQE, IoUringError> {
+    pub fn wait_cqe(&mut self) -> Result<IoUringCQEPtr, IoUringError> {
         unsafe {
             let mut ptr: *mut io_uring_cqe = ptr::null_mut();
             let errno = io_uring_wait_cqe(&mut self.ring, &mut ptr);
             match -errno {
-                0 => Ok(IoUringCQE { cqe: ptr }),
+                0 => Ok(IoUringCQEPtr { cqe: ptr }),
                 libc::EAGAIN => return Err(IoUringError::TryAgain),
                 libc::EBUSY => return Err(IoUringError::TryAgain),
                 libc::EINTR => return Err(IoUringError::TryAgain),
@@ -137,7 +146,7 @@ impl IoUring {
         }
     }
 
-    pub fn cqe_seen(&mut self, entry: IoUringCQE) {
+    pub fn cqe_seen(&mut self, entry: IoUringCQEPtr) {
         unsafe {
             io_uring_cqe_seen(&mut self.ring, entry.cqe)
         }
@@ -150,10 +159,17 @@ impl IoUringSQE {
     }
 }
 
-impl IoUringCQE {
+impl IoUringCQEPtr {
     pub fn get_data64(&self) -> u64 {
         unsafe {
             io_uring_cqe_get_data64(self.cqe)
+        }
+    }
+
+    pub fn copy_from(&self) -> IoUringCQE {
+        IoUringCQE {
+            result: self.get_result(),
+            flags: self.get_flags()
         }
     }
 

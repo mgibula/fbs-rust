@@ -1,12 +1,12 @@
 use std::future::Future;
 use std::cell::RefCell;
 use std::pin::Pin;
+use std::mem::drop;
 use std::task::{Context, Poll};
 use thiserror::Error;
 
 use fbs_executor::*;
 use fbs_reactor::*;
-
 
 #[derive(Error, Debug)]
 pub enum RuntimeError {
@@ -35,11 +35,11 @@ fn async_run_once() -> bool {
     })
 }
 
-pub fn async_run_all() {
+#[cfg(test)]
+fn async_run_all() {
     EXECUTOR.with(|e| {
         e.borrow_mut().run_all();
-        e.borrow().has_pending_tasks()
-    });
+    })
 }
 
 pub fn async_yield() -> Yield {
@@ -48,17 +48,46 @@ pub fn async_yield() -> Yield {
     })
 }
 
+fn local_executor_run_all() {
+    EXECUTOR.with(|e| {
+        let mut e = e.borrow_mut();
+        while e.has_ready_tasks() {
+            e.run_all();
+        }
+    });
+}
+
+fn local_reactor_process_ops() -> bool {
+    REACTOR.with(|r| {
+        r.borrow_mut().process_ops().expect("io_uring error")
+    })
+}
+
+pub fn async_run(future: impl Future<Output = ()> + 'static) {
+    let handle = async_spawn(future);
+
+    loop {
+        local_executor_run_all();
+        let made_progress = local_reactor_process_ops();
+        if !made_progress {
+            break;
+        }
+    }
+
+    drop(handle);   // this is to extend lifetime of handle
+}
+
 pub struct AsyncOp (ReactorOp, Option<OpDescriptorPtr>);
 
 impl Future for AsyncOp {
-    type Output = ();
+    type Output = IoUringCQE;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         match &self.1 {
             Some(op) => {
                 match op.completed() {
                     false => Poll::Pending,
-                    true => Poll::Ready(())
+                    true => Poll::Ready(op.get_cqe())
                 }
             },
             None => {
@@ -126,5 +155,13 @@ mod tests {
         async_run_all();
         assert_eq!(handle1.is_completed(), true);
         assert_eq!(handle2.is_completed(), true);
+    }
+
+    #[test]
+    fn local_nop_test() {
+        async_run(async {
+            let result = async_nop().await;
+            assert_eq!(result.result, 0);
+        });
     }
 }

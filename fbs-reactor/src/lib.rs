@@ -8,6 +8,8 @@ use liburing_sys::*;
 use io_uring::*;
 use thiserror::Error;
 
+pub use io_uring::IoUringCQE;
+
 mod io_uring;
 
 #[derive(Error, Debug)]
@@ -66,8 +68,20 @@ impl OpDescriptorPtr {
         self.ptr.borrow().cqe.is_some()
     }
 
+    pub(self) fn set_cqe(&self, cqe: &IoUringCQEPtr) {
+        self.ptr.borrow_mut().cqe = Some(cqe.copy_from());
+    }
+
+    pub fn get_cqe(&self) -> IoUringCQE {
+        self.ptr.borrow().cqe.unwrap()
+    }
+
     pub fn get_index(&self) -> usize {
         self.ptr.borrow().index
+    }
+
+    pub(self) fn notify_completion(&self) {
+        self.ptr.borrow_mut().waker.wake_by_ref();
     }
 }
 
@@ -85,6 +99,7 @@ pub struct Reactor {
     ops: Vec<Option<OpDescriptorPtr>>,
     ops_free_entries: Vec<usize>,
     in_flight: i32,
+    uncommited: i32,
 }
 
 impl Reactor {
@@ -94,7 +109,7 @@ impl Reactor {
             cq_entries: 64,
         };
 
-        Ok(Reactor { ring: IoUring::new(params)?, ops: vec![], ops_free_entries: vec![], in_flight: 0 })
+        Ok(Reactor { ring: IoUring::new(params)?, ops: vec![], ops_free_entries: vec![], in_flight: 0, uncommited: 0 })
     }
 
     pub fn schedule(&mut self, op: &mut ReactorOp, waker: Waker) -> Result<OpDescriptorPtr, ReactorError> {
@@ -107,6 +122,7 @@ impl Reactor {
         desc.copy_from(op);
 
         self.in_flight += 1;
+        self.uncommited += 1;
         Ok(desc)
     }
 
@@ -137,8 +153,58 @@ impl Reactor {
         self.ring.get_sqe().ok_or_else(|| ReactorError::NoSQEAvailable)
     }
 
-    fn submit(&mut self) -> i32 {
-        self.ring.submit()
+    pub fn submit(&mut self) -> i32 {
+        let mut result = 0;
+
+        if self.uncommited > 0 {
+            result = self.ring.submit();
+            self.uncommited = 0;
+        }
+
+        result
+    }
+
+    pub fn process_ops(&mut self) -> Result<bool, IoUringError> {
+        if self.in_flight == 0 {
+            return Ok(false);
+        }
+
+        let handled = self.process_completed_ops();
+        if !handled {
+            self.submit();
+            self.wait_for_completion()?;
+        }
+
+        Ok(true)
+    }
+
+    fn process_completed_ops(&mut self) -> bool {
+        let mut handled = false;
+        while let Some(cqe) = self.ring.peek_cqe() {
+            self.process_cqe(cqe);
+            handled = true;
+        }
+
+        handled
+    }
+
+    fn process_cqe(&mut self, cqe: IoUringCQEPtr) {
+        self.in_flight -= 1;
+
+        let index = cqe.get_data64() as usize;
+        let op = self.ops[index].take().expect("io_uring returned completed op with incorrect index");
+        op.set_cqe(&cqe);
+
+        self.ops_free_entries.push(index);
+        self.ring.cqe_seen(cqe);
+
+        op.notify_completion();
+    }
+
+    fn wait_for_completion(&mut self) -> Result<(), IoUringError> {
+        let cqe = self.ring.wait_cqe()?;
+        self.process_cqe(cqe);
+        Ok(())
     }
 }
 
