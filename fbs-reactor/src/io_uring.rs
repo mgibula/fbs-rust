@@ -15,6 +15,7 @@ pub struct IoUringParams {
 pub struct IoUring {
     ring: io_uring,
     created: bool,
+    probe: *mut io_uring_probe,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -55,7 +56,10 @@ pub enum IoUringError {
 impl Drop for IoUring {
     fn drop(&mut self) {
         if self.created {
-            unsafe { io_uring_queue_exit(&mut self.ring) }
+            unsafe {
+                io_uring_free_probe(self.probe);
+                io_uring_queue_exit(&mut self.ring);
+            }
         }
     }
 }
@@ -68,6 +72,7 @@ impl IoUring {
                     _bindgen_opaque_blob: mem::zeroed(),
                 },
                 created: false,
+                probe: std::ptr::null_mut(),
             };
 
             let mut raw_params: io_uring_params = mem::zeroed();
@@ -86,9 +91,15 @@ impl IoUring {
                 _ => panic!("Unexpected error: {}", errno),
             }
 
+            result.probe = io_uring_get_probe_ring(&mut result.ring);
             result.created = true;
+
             Ok(result)
         }
+    }
+
+    pub fn is_op_supported(&self, opcode: u8) -> bool {
+        unsafe { io_uring_opcode_supported(self.probe, opcode as i32) > 0 }
     }
 
     pub fn sq_space_left(&self) -> u32 {
