@@ -181,7 +181,7 @@ impl OpDescriptorPtr {
 }
 
 struct OpDescriptor {
-    sqe: IoUringSQE,
+    sqe: IoUringSQEPtr,
     cqe: Option<IoUringCQE>,
     index: usize,
     waker: Waker,
@@ -247,7 +247,7 @@ impl Reactor {
         Ok(result)
     }
 
-    fn get_sqe(&mut self) -> Result<IoUringSQE, ReactorError> {
+    fn get_sqe(&mut self) -> Result<IoUringSQEPtr, ReactorError> {
         self.ring.get_sqe().ok_or_else(|| ReactorError::NoSQEAvailable)
     }
 

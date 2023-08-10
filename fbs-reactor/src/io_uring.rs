@@ -19,7 +19,7 @@ pub struct IoUring {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct IoUringSQE {
+pub struct IoUringSQEPtr {
     sqe: *mut io_uring_sqe,
 }
 
@@ -110,11 +110,11 @@ impl IoUring {
         unsafe { io_uring_submit(&mut self.ring) }
     }
 
-    pub fn get_sqe(&mut self) -> Option<IoUringSQE> {
+    pub fn get_sqe(&mut self) -> Option<IoUringSQEPtr> {
         unsafe {
             let ptr = io_uring_get_sqe(&mut self.ring);
             if !ptr.is_null() {
-                return Some(IoUringSQE {
+                return Some(IoUringSQEPtr {
                     sqe: ptr,
                 });
             }
@@ -162,7 +162,7 @@ impl IoUring {
     }
 }
 
-impl IoUringSQE {
+impl IoUringSQEPtr {
     pub fn copy_from(&mut self, sqe: &io_uring_sqe) {
         unsafe { *self.sqe = *sqe };
     }
