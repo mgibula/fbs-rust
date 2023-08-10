@@ -2,13 +2,19 @@ use std::future::Future;
 use std::cell::RefCell;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::marker::PhantomData;
 use thiserror::Error;
 
 use fbs_executor::*;
 use fbs_reactor::*;
 
 mod ops;
+mod open_mode;
+mod socket;
+
 pub use ops::*;
+pub use open_mode::*;
+pub use socket::*;
 
 #[derive(Error, Debug)]
 pub enum RuntimeError {
@@ -33,6 +39,12 @@ pub fn async_spawn<T: 'static>(future: impl Future<Output = T> + 'static) -> Tas
 pub fn async_yield() -> Yield {
     FRONTEND.with(|e| {
         e.yield_execution()
+    })
+}
+
+pub fn async_op_supported<T: AsyncOpResult>(op: &AsyncOp<T>) -> bool {
+    REACTOR.with(|r| {
+        r.borrow().is_supported(&op.0)
     })
 }
 
@@ -65,18 +77,24 @@ fn local_reactor_process_ops() -> bool {
     })
 }
 
-pub struct AsyncOp (ReactorOp, Option<OpDescriptorPtr>);
+pub trait AsyncOpResult : Unpin {
+    type Output;
 
-impl Future for AsyncOp {
-    type Output = i32;
+    fn get_result(op: &mut OpDescriptorPtr) -> Self::Output;
+}
+
+pub struct AsyncOp<T: AsyncOpResult> (ReactorOp, Option<OpDescriptorPtr>, PhantomData<T>);
+
+impl<T: AsyncOpResult> Future for AsyncOp<T> {
+    type Output = T::Output;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        match &self.1 {
+        match &mut self.1 {
             // already scheduled
             Some(op) => {
                 match op.completed() {
                     false => Poll::Pending,
-                    true => Poll::Ready(op.get_cqe().result)
+                    true => Poll::Ready(T::get_result(op))
                 }
             },
             // not yet scheduled
@@ -165,7 +183,10 @@ mod tests {
     #[test]
     fn local_openat2_test() {
         let result = async_run(async {
-            let result = async_open("/tmp/testowy-uring.txt").await;
+            let mut options = OpenMode::new();
+            options.create(true, 0o777);
+
+            let result = async_open("/tmp/testowy-uring.txt", &options).await;
             assert!(result >= 0);
             1
         });
@@ -196,5 +217,32 @@ mod tests {
 
         // ensure it actually executed
         assert_eq!(result, 1);
+    }
+
+    #[test]
+    fn local_socket_test() {
+        let result = async_run(async {
+            let op = async_socket(SocketDomain::Inet, SocketType::Stream, SocketOptions::new());
+            if async_op_supported(&op) {
+                let sockfd = op.await;
+                assert!(sockfd > 0);
+            }
+            1
+        });
+
+        // ensure it actually executed
+        assert_eq!(result, 1);
+    }
+
+    fn local_read_test() {
+        let result = async_run(async {
+            let dupa = async_read(12, vec![]);
+            let dupa2 = async_read(12, vec![]);
+
+            let a = dupa2.await;
+
+            1
+        });
+
     }
 }
