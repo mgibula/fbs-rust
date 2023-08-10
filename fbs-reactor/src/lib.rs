@@ -3,8 +3,9 @@ use std::ffi::{CString, OsStr};
 use std::rc::Rc;
 use std::mem::{self, ManuallyDrop};
 use std::task::Waker;
-use std::ops::Drop;
+use std::ops::{Drop, DerefMut};
 use std::os::unix::prelude::OsStrExt;
+use std::pin::Pin;
 
 use liburing_sys::*;
 use io_uring::*;
@@ -24,6 +25,7 @@ pub enum ReactorError {
 enum ReactorOpExtraParamsType {
     None,
     OpenAt2,
+    Buffer,
 }
 
 #[repr(C)]
@@ -33,8 +35,14 @@ struct ReactorOpExtraParamsOpenAt2 {
 }
 
 #[repr(C)]
+struct ReactorOpExtraParamsBuffer {
+    buffer: Vec<u8>,
+}
+
+#[repr(C)]
 union ReactorOpExtraParamsUnion {
     openat2: mem::ManuallyDrop<ReactorOpExtraParamsOpenAt2>,
+    buffer: mem::ManuallyDrop<ReactorOpExtraParamsBuffer>,
 }
 
 #[repr(C)]
@@ -59,19 +67,22 @@ impl Drop for ReactorOpExtraParams {
                 ReactorOpExtraParamsType::None => {},
                 ReactorOpExtraParamsType::OpenAt2 => {
                     ManuallyDrop::drop(&mut self.value.openat2);
+                },
+                ReactorOpExtraParamsType::Buffer => {
+                    ManuallyDrop::drop(&mut self.value.buffer);
                 }
             }
         }
     }
 }
 
-pub struct ReactorOp(io_uring_sqe, ReactorOpExtraParams);
+pub struct ReactorOp(io_uring_sqe, Option<Pin<Box<ReactorOpExtraParams>>>);
 
 impl ReactorOp {
     pub fn new() -> Self {
         let mut result = ReactorOp {
             0: unsafe { mem::zeroed() },
-            1: ReactorOpExtraParams::new(),
+            1: Some(Box::pin(ReactorOpExtraParams::new())),
         };
 
         result.prepare_nop();
@@ -92,10 +103,28 @@ impl ReactorOp {
 
     pub fn prepare_openat2(&mut self, path: &OsStr, flags: i32, mode: u32) {
         unsafe {
-            self.1.tag = ReactorOpExtraParamsType::OpenAt2;
-            self.1.value.openat2 = ManuallyDrop::new(ReactorOpExtraParamsOpenAt2 { how: mem::zeroed(), path: CString::new(path.as_bytes()).expect("Null character in filename") });
+            let mut extra_params = self.1.as_mut().unwrap();
+            extra_params.tag = ReactorOpExtraParamsType::OpenAt2;
+            extra_params.value.openat2 = ManuallyDrop::new(ReactorOpExtraParamsOpenAt2 { how: mem::zeroed(), path: CString::new(path.as_bytes()).expect("Null character in filename") });
 
-            io_uring_prep_openat(&mut self.0, libc::AT_FDCWD, self.1.value.openat2.path.as_ptr(), flags, mode);
+            io_uring_prep_openat(&mut self.0, libc::AT_FDCWD, extra_params.value.openat2.path.as_ptr(), flags, mode);
+        }
+    }
+
+    pub fn prepare_socket(&mut self, domain: i32, socket_type: i32, protocol: i32) {
+        unsafe {
+            io_uring_prep_socket(&mut self.0, domain, socket_type, protocol, 0);
+        }
+    }
+
+    pub fn prepare_read(&mut self, fd: i32, buffer: Vec<u8>, offset: Option<u64>) {
+        unsafe {
+            let mut extra_params = self.1.as_mut().unwrap();
+            extra_params.tag = ReactorOpExtraParamsType::Buffer;
+            extra_params.value.buffer = ManuallyDrop::new(ReactorOpExtraParamsBuffer { buffer });
+
+            let buffer = &mut extra_params.value.buffer.deref_mut().buffer;
+            io_uring_prep_read(&mut self.0, fd, buffer.as_mut_ptr() as *mut libc::c_void, buffer.len() as u32, offset.unwrap_or(u64::MAX));
         }
     }
 
@@ -108,6 +137,13 @@ impl ReactorOp {
     pub fn set_flags(&mut self, flags: u32) {
         unsafe {
             io_uring_sqe_set_flags(&mut self.0, flags)
+        }
+    }
+
+    pub fn opcode(&self) -> u8 {
+        // opcode is u8 field at offset zero
+        unsafe {
+            *(&self.0 as *const io_uring_sqe as *const u8)
         }
     }
 }
@@ -149,6 +185,7 @@ struct OpDescriptor {
     cqe: Option<IoUringCQE>,
     index: usize,
     waker: Waker,
+    extra_params: Option<Pin<Box<ReactorOpExtraParams>>>,
 }
 
 pub struct Reactor {
@@ -169,12 +206,16 @@ impl Reactor {
         Ok(Reactor { ring: IoUring::new(params)?, ops: vec![], ops_free_entries: vec![], in_flight: 0, uncommited: 0 })
     }
 
+    pub fn is_supported(&self, op: &ReactorOp) -> bool {
+        self.ring.is_op_supported(op.opcode())
+    }
+
     pub fn schedule(&mut self, op: &mut ReactorOp, waker: Waker) -> Result<OpDescriptorPtr, ReactorError> {
         if self.ring.sq_space_left() == 0 {
             self.submit();
         }
 
-        let mut desc = self.create_op_descriptor(waker)?;
+        let mut desc = self.create_op_descriptor(waker, op.1.take().unwrap())?;
         op.set_data64(desc.get_index() as u64);
         desc.copy_from(op);
 
@@ -187,14 +228,14 @@ impl Reactor {
         self.in_flight
     }
 
-    fn create_op_descriptor(&mut self, waker: Waker) -> Result<OpDescriptorPtr, ReactorError> {
+    fn create_op_descriptor(&mut self, waker: Waker, extra_params: Pin<Box<ReactorOpExtraParams>>) -> Result<OpDescriptorPtr, ReactorError> {
         let index = match self.ops_free_entries.pop() {
             Some(index) => index,
             None => self.ops.len(),
         };
 
         let result = OpDescriptorPtr {
-            ptr: Rc::new(RefCell::new(OpDescriptor { sqe: self.get_sqe()?, cqe: None, index, waker }))
+            ptr: Rc::new(RefCell::new(OpDescriptor { sqe: self.get_sqe()?, cqe: None, index, waker, extra_params: Some(extra_params) }))
         };
 
         if self.ops.len() == index {
