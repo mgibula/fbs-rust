@@ -76,6 +76,70 @@ impl Drop for ReactorOpExtraParams {
     }
 }
 
+enum ReactorOpSQE {
+    Unscheduled(io_uring_sqe),
+    Scheduled(IoUringSQEPtr),
+}
+
+pub struct ReactorOpParameters {
+    how: libc::open_how,
+    path: CString,
+    buffer: Vec<u8>,
+}
+
+impl ReactorOpParameters {
+    pub fn new() -> Self {
+        ReactorOpParameters { how: unsafe { mem::zeroed() }, path: CString::default(), buffer: Vec::default() }
+    }
+}
+
+pub struct ReactorOp2 {
+    sqe: ReactorOpSQE,
+    parameters: ReactorOpParameters,
+    cqe: Option<IoUringCQEPtr>,
+    index: usize,
+    waker: Option<Waker>,
+}
+
+impl ReactorOp2 {
+    pub fn new() -> Self {
+        ReactorOp2 {
+            sqe: ReactorOpSQE::Unscheduled(unsafe { mem::zeroed() }),
+            parameters: ReactorOpParameters::new(),
+            cqe: None,
+            index: 0,
+            waker: None
+        }
+    }
+}
+
+pub struct ReactorOpPtr {
+    ptr: Rc<RefCell<ReactorOp2>>,
+}
+
+impl ReactorOpPtr {
+    pub fn new() -> Self {
+        ReactorOpPtr { ptr: Rc::new(RefCell::new(ReactorOp2::new())) }
+    }
+
+    fn schedule(&self, mut target_sqe: IoUringSQEPtr, index: usize, waker: Waker) {
+        let mut op = self.ptr.borrow_mut();
+        match op.sqe {
+            ReactorOpSQE::Unscheduled(sqe) => {
+                target_sqe.copy_from(&sqe);
+                target_sqe.set_data64(index as u64);
+            },
+            ReactorOpSQE::Scheduled(_) => {
+                panic!("Trying to schedule already scheduled op");
+            }
+        }
+
+        op.index = index;
+        op.waker = Some(waker);
+        op.sqe = ReactorOpSQE::Scheduled(target_sqe);
+    }
+}
+
 pub struct ReactorOp(io_uring_sqe, Option<Pin<Box<ReactorOpExtraParams>>>);
 
 impl ReactorOp {
@@ -185,12 +249,13 @@ struct OpDescriptor {
     cqe: Option<IoUringCQE>,
     index: usize,
     waker: Waker,
-    extra_params: Option<Pin<Box<ReactorOpExtraParams>>>,
+    extra_params: ReactorOpExtraParams,
 }
 
 pub struct Reactor {
     ring: IoUring,
     ops: Vec<Option<OpDescriptorPtr>>,
+    ops2: Vec<Option<ReactorOpPtr>>,
     ops_free_entries: Vec<usize>,
     in_flight: i32,
     uncommited: i32,
@@ -203,11 +268,34 @@ impl Reactor {
             cq_entries: 64,
         };
 
-        Ok(Reactor { ring: IoUring::new(params)?, ops: vec![], ops_free_entries: vec![], in_flight: 0, uncommited: 0 })
+        Ok(Reactor { ring: IoUring::new(params)?, ops: vec![], ops2: vec![], ops_free_entries: vec![], in_flight: 0, uncommited: 0 })
     }
 
     pub fn is_supported(&self, op: &ReactorOp) -> bool {
         self.ring.is_op_supported(op.opcode())
+    }
+
+    pub fn schedule2(&mut self, op: ReactorOpPtr, waker: Waker) -> Result<(), ReactorError> {
+        if self.ring.sq_space_left() == 0 {
+            self.submit();
+        }
+
+        let sqe = self.get_sqe()?;
+
+        let index = match self.ops_free_entries.pop() {
+            Some(index) => index,
+            None => self.ops.len(),
+        };
+
+        op.schedule(sqe, index, waker);
+
+        if self.ops.len() == index {
+            self.ops2.push(Some(op));
+        } else {
+            self.ops2[index] = Some(op);
+        }
+
+        Ok(())
     }
 
     pub fn schedule(&mut self, op: &mut ReactorOp, waker: Waker) -> Result<OpDescriptorPtr, ReactorError> {
@@ -235,7 +323,7 @@ impl Reactor {
         };
 
         let result = OpDescriptorPtr {
-            ptr: Rc::new(RefCell::new(OpDescriptor { sqe: self.get_sqe()?, cqe: None, index, waker, extra_params: Some(extra_params) }))
+            ptr: Rc::new(RefCell::new(OpDescriptor { sqe: self.get_sqe()?, cqe: None, index, waker, extra_params: ReactorOpExtraParams::new() }))
         };
 
         if self.ops.len() == index {

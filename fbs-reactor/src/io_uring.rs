@@ -166,6 +166,12 @@ impl IoUringSQEPtr {
     pub fn copy_from(&mut self, sqe: &io_uring_sqe) {
         unsafe { *self.sqe = *sqe };
     }
+
+    pub fn set_data64(&mut self, data: u64) {
+        unsafe {
+            io_uring_sqe_set_data64(self.sqe, data)
+        }
+    }
 }
 
 impl IoUringCQEPtr {
