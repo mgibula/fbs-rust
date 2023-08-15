@@ -8,15 +8,42 @@ use super::SocketDomain;
 use super::SocketType;
 use super::SocketOptions;
 use super::AsyncOpResult;
+use super::IoUringCQE;
+use super::ReactorOpParameters;
 
 pub struct ResultErrno {
 }
 
 impl AsyncOpResult for ResultErrno {
-    type Output = i32;
+    type Output = Result<i32, i32>;
 
-    fn get_result(op: &ReactorOpPtr) -> Self::Output {
-        op.get_cqe().result
+    fn get_result(cqe: IoUringCQE, _params: ReactorOpParameters) -> Self::Output {
+        let result = if cqe.result >= 0 {
+            Ok(cqe.result)
+        } else {
+            Err(-cqe.result)
+        };
+
+        result
+    }
+}
+
+pub struct ResultBuffer {
+}
+
+impl AsyncOpResult for ResultBuffer {
+    type Output = Result<Vec<u8>, (i32, Vec<u8>)>;
+
+    fn get_result(cqe: IoUringCQE, params: ReactorOpParameters) -> Self::Output {
+        let mut buffer = params.buffer;
+        let result = if cqe.result >= 0 {
+            buffer.resize(cqe.result as usize, 0);
+            Ok(buffer)
+        } else {
+            Err((-cqe.result, buffer))
+        };
+
+        result
     }
 }
 
@@ -48,6 +75,9 @@ pub fn async_socket(domain: SocketDomain, socket_type: SocketType, options: Sock
     AsyncOp(op, PhantomData)
 }
 
-pub fn async_read(fd: i32, buffer: Vec<u8>) -> AsyncOp::<ResultErrno> {
-    unimplemented!()
+pub fn async_read(fd: i32, buffer: Vec<u8>) -> AsyncOp::<ResultBuffer> {
+    let mut op = ReactorOpPtr::new();
+    op.prepare_read(fd, buffer, None);
+
+    AsyncOp(op, PhantomData)
 }

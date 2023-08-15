@@ -80,7 +80,7 @@ fn local_reactor_process_ops() -> bool {
 pub trait AsyncOpResult : Unpin {
     type Output;
 
-    fn get_result(op: &ReactorOpPtr) -> Self::Output;
+    fn get_result(cqe: IoUringCQE, params: ReactorOpParameters) -> Self::Output;
 }
 
 pub struct AsyncOp<T: AsyncOpResult> (ReactorOpPtr, PhantomData<T>);
@@ -88,12 +88,12 @@ pub struct AsyncOp<T: AsyncOpResult> (ReactorOpPtr, PhantomData<T>);
 impl<T: AsyncOpResult> Future for AsyncOp<T> {
     type Output = T::Output;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         match self.0.scheduled() {
             true => {
                 match self.0.completed() {
                     false => Poll::Pending,
-                    true => Poll::Ready(T::get_result(&self.0)),
+                    true => Poll::Ready(T::get_result(self.0.get_cqe(), self.0.fetch_parameters())),
                 }
             },
             false => {
@@ -166,7 +166,7 @@ mod tests {
     fn local_nop_test() {
         let result = async_run(async {
             let result = async_nop().await;
-            assert_eq!(result, 0);
+            assert_eq!(result, Ok(0));
 
             1
         });
@@ -182,7 +182,7 @@ mod tests {
             options.create(true, 0o777);
 
             let result = async_open("/tmp/testowy-uring.txt", &options).await;
-            assert!(result >= 0);
+            assert!(result.is_ok());
             1
         });
 
@@ -194,7 +194,7 @@ mod tests {
     fn local_close_test() {
         let result = async_run(async {
             let result = async_close(123).await;
-            assert_eq!(result, -libc::EBADF);
+            assert!(result.is_err());
             1
         });
 
@@ -206,7 +206,7 @@ mod tests {
     fn local_close_test2() {
         let result = async_run(async {
             let result = async_close(0).await;
-            assert_eq!(result, 0);
+            assert!(result.is_ok());
             1
         });
 
@@ -220,7 +220,7 @@ mod tests {
             let op = async_socket(SocketDomain::Inet, SocketType::Stream, SocketOptions::new());
             if async_op_supported(&op) {
                 let sockfd = op.await;
-                assert!(sockfd > 0);
+                assert!(sockfd.is_ok());
             }
             1
         });
@@ -229,15 +229,18 @@ mod tests {
         assert_eq!(result, 1);
     }
 
+    #[test]
     fn local_read_test() {
         let result = async_run(async {
-            let dupa = async_read(12, vec![]);
-            let dupa2 = async_read(12, vec![]);
+            let data = async_read(12, vec![]);
+            let data = data.await;
 
-            let a = dupa2.await;
-
+            assert!(data.is_err());
+            assert_eq!(data.err().unwrap().0, libc::EBADF);
             1
         });
 
+        // ensure it actually executed
+        assert_eq!(result, 1);
     }
 }

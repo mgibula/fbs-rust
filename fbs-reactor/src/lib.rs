@@ -24,9 +24,10 @@ enum ReactorOpSQE {
     Scheduled(IoUringSQEPtr),
 }
 
-struct ReactorOpParameters {
+#[derive(Default)]
+pub struct ReactorOpParameters {
     path: CString,
-    buffer: Vec<u8>,
+    pub buffer: Vec<u8>,
 }
 
 impl ReactorOpParameters {
@@ -63,6 +64,10 @@ pub struct ReactorOpPtr {
 impl ReactorOpPtr {
     pub fn new() -> Self {
         ReactorOpPtr { ptr: Rc::new(RefCell::new(ReactorOp::new())) }
+    }
+
+    pub fn fetch_parameters(&mut self) -> ReactorOpParameters {
+        std::mem::take(&mut self.ptr.borrow_mut().parameters)
     }
 
     pub fn prepare_nop(&mut self) {
