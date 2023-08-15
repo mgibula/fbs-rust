@@ -80,37 +80,32 @@ fn local_reactor_process_ops() -> bool {
 pub trait AsyncOpResult : Unpin {
     type Output;
 
-    fn get_result(op: &mut OpDescriptorPtr) -> Self::Output;
+    fn get_result(op: &ReactorOpPtr) -> Self::Output;
 }
 
-pub struct AsyncOp<T: AsyncOpResult> (ReactorOp, Option<OpDescriptorPtr>, PhantomData<T>);
+pub struct AsyncOp<T: AsyncOpResult> (ReactorOpPtr, PhantomData<T>);
 
 impl<T: AsyncOpResult> Future for AsyncOp<T> {
     type Output = T::Output;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        match &mut self.1 {
-            // already scheduled
-            Some(op) => {
-                match op.completed() {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        match self.0.scheduled() {
+            true => {
+                match self.0.completed() {
                     false => Poll::Pending,
-                    true => Poll::Ready(T::get_result(op))
+                    true => Poll::Ready(T::get_result(&self.0)),
                 }
             },
-            // not yet scheduled
-            None => {
+            false => {
                 let scheduled = REACTOR.with(|r| {
-                    r.borrow_mut().schedule(&mut self.0, cx.waker().clone())
+                    r.borrow_mut().schedule(&self.0, cx.waker().clone())
                 });
 
                 match scheduled {
                     Err(error) => panic!("Error while scheduling async op: {}", error),
-                    Ok(op) => {
-                        self.1 = Some(op);
-                        Poll::Pending
-                    }
+                    Ok(_) => Poll::Pending,
                 }
-            }
+            },
         }
     }
 }

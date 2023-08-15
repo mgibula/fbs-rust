@@ -163,6 +163,12 @@ impl IoUring {
 }
 
 impl IoUringSQEPtr {
+    #[inline]
+    pub fn opcode(&self) -> u8 {
+        return unsafe { *(self.sqe as *const io_uring_sqe as *const u8) };
+    }
+
+    #[inline]
     pub fn copy_from(&mut self, sqe: &io_uring_sqe) {
         unsafe { *self.sqe = *sqe };
     }
@@ -181,6 +187,7 @@ impl IoUringCQEPtr {
         }
     }
 
+    #[inline]
     pub fn copy_from(&self) -> IoUringCQE {
         IoUringCQE {
             result: self.get_result(),
@@ -188,12 +195,14 @@ impl IoUringCQEPtr {
         }
     }
 
+    #[inline]
     pub fn get_result(&self) -> i32 {
         unsafe {
             (*self.cqe).res
         }
     }
 
+    #[inline]
     pub fn get_flags(&self) -> u32 {
         unsafe {
             (*self.cqe).flags
