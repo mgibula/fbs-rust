@@ -81,3 +81,10 @@ pub fn async_read(fd: i32, buffer: Vec<u8>) -> AsyncOp::<ResultBuffer> {
 
     AsyncOp(op, PhantomData)
 }
+
+pub fn async_write(fd: i32, buffer: Vec<u8>) -> AsyncOp::<ResultBuffer> {
+    let mut op = ReactorOpPtr::new();
+    op.prepare_write(fd, buffer, None);
+
+    AsyncOp(op, PhantomData)
+}

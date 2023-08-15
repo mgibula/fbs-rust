@@ -132,6 +132,20 @@ impl ReactorOpPtr {
         }
     }
 
+    pub fn prepare_write(&mut self, fd: i32, buffer: Vec<u8>, offset: Option<u64>) {
+        let mut op = self.ptr.borrow_mut();
+        op.parameters.buffer = buffer;
+
+        match &mut op.sqe {
+            ReactorOpSQE::Scheduled(_) => panic!("Attempting to prepare already scheduled op"),
+            ReactorOpSQE::Unscheduled(sqe) => {
+                unsafe {
+                    io_uring_prep_write(sqe, fd, op.parameters.buffer.as_ptr() as *const libc::c_void, op.parameters.buffer.len() as u32, offset.unwrap_or(u64::MAX));
+                }
+            }
+        }
+    }
+
     fn schedule(&self, mut target_sqe: IoUringSQEPtr, index: usize, waker: Waker) {
         let mut op = self.ptr.borrow_mut();
         match &op.sqe {
