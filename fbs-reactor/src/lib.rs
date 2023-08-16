@@ -41,7 +41,7 @@ struct ReactorOp {
     parameters: ReactorOpParameters,
     cqe: Option<IoUringCQE>,
     index: usize,
-    waker: Option<Waker>,
+    completion: Box<dyn Fn()>,
 }
 
 impl ReactorOp {
@@ -51,7 +51,7 @@ impl ReactorOp {
             parameters: ReactorOpParameters::new(),
             cqe: None,
             index: 0,
-            waker: None
+            completion: Box::new(|| { }),
         }
     }
 }
@@ -146,7 +146,11 @@ impl ReactorOpPtr {
         }
     }
 
-    fn schedule(&self, mut target_sqe: IoUringSQEPtr, index: usize, waker: Waker) {
+    pub fn set_completion(&self, callback: impl Fn() + 'static) {
+        self.ptr.borrow_mut().completion = Box::new(callback);
+    }
+
+    fn schedule(&self, mut target_sqe: IoUringSQEPtr, index: usize) {
         let mut op = self.ptr.borrow_mut();
         match &op.sqe {
             ReactorOpSQE::Unscheduled(sqe) => {
@@ -159,7 +163,6 @@ impl ReactorOpPtr {
         }
 
         op.index = index;
-        op.waker = Some(waker);
         op.sqe = ReactorOpSQE::Scheduled(target_sqe);
     }
 
@@ -195,8 +198,8 @@ impl ReactorOpPtr {
         self.ptr.borrow().cqe.unwrap()
     }
 
-    fn notify_completion(&self) {
-        self.ptr.borrow_mut().waker.as_ref().unwrap().wake_by_ref();
+    fn complete_op(&self) {
+        (&self.ptr.borrow_mut().completion)();
     }
 }
 
@@ -222,7 +225,7 @@ impl Reactor {
         self.ring.is_op_supported(op.opcode())
     }
 
-    pub fn schedule(&mut self, op: &ReactorOpPtr, waker: Waker) -> Result<(), ReactorError> {
+    pub fn schedule(&mut self, op: &ReactorOpPtr) -> Result<(), ReactorError> {
         if self.ring.sq_space_left() == 0 {
             self.submit();
         }
@@ -234,7 +237,7 @@ impl Reactor {
             None => self.ops.len(),
         };
 
-        op.schedule(sqe, index, waker);
+        op.schedule(sqe, index);
 
         if self.ops.len() == index {
             self.ops.push(Some(op.clone()));
@@ -301,7 +304,7 @@ impl Reactor {
         self.ops_free_entries.push(index);
         self.ring.cqe_seen(cqe);
 
-        op.notify_completion();
+        op.complete_op();
     }
 
     fn wait_for_completion(&mut self) -> Result<(), IoUringError> {
