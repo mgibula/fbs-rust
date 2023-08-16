@@ -2,8 +2,8 @@ use std::cell::RefCell;
 use std::ffi::{CString, OsStr};
 use std::rc::Rc;
 use std::mem::{self};
-use std::task::Waker;
 use std::os::unix::prelude::OsStrExt;
+use std::slice;
 
 use liburing_sys::*;
 use io_uring::*;
@@ -150,12 +150,13 @@ impl ReactorOpPtr {
         self.ptr.borrow_mut().completion = Box::new(callback);
     }
 
-    fn schedule(&self, mut target_sqe: IoUringSQEPtr, index: usize) {
+    fn schedule(&self, mut target_sqe: IoUringSQEPtr, index: usize, flags: u32) {
         let mut op = self.ptr.borrow_mut();
         match &op.sqe {
             ReactorOpSQE::Unscheduled(sqe) => {
                 target_sqe.copy_from(sqe);
                 target_sqe.set_data64(index as u64);
+                target_sqe.set_flags(flags);
             },
             ReactorOpSQE::Scheduled(_) => {
                 panic!("Trying to schedule already scheduled op");
@@ -207,8 +208,8 @@ pub struct Reactor {
     ring: IoUring,
     ops: Vec<Option<ReactorOpPtr>>,
     ops_free_entries: Vec<usize>,
-    in_flight: i32,
-    uncommited: i32,
+    in_flight: u32,
+    uncommited: u32,
 }
 
 impl Reactor {
@@ -225,33 +226,53 @@ impl Reactor {
         self.ring.is_op_supported(op.opcode())
     }
 
-    pub fn schedule(&mut self, op: &ReactorOpPtr) -> Result<(), ReactorError> {
-        if self.ring.sq_space_left() == 0 {
+    fn get_next_index(&mut self) -> usize {
+        let index = match self.ops_free_entries.pop() {
+            Some(index) => index,
+            None => {
+                self.ops.push(None);
+                self.ops.len() - 1
+            }
+        };
+
+        index
+    }
+
+    pub fn schedule_linked(&mut self, ops: &[ReactorOpPtr]) -> Result<(), ReactorError> {
+        let ops_count = ops.len() as u32;
+
+        if self.ring.sq_space_left() < ops_count {
             self.submit();
         }
 
-        let sqe = self.get_sqe()?;
-
-        let index = match self.ops_free_entries.pop() {
-            Some(index) => index,
-            None => self.ops.len(),
-        };
-
-        op.schedule(sqe, index);
-
-        if self.ops.len() == index {
-            self.ops.push(Some(op.clone()));
-        } else {
-            self.ops[index] = Some(op.clone());
+        if self.ring.sq_space_left() < ops_count {
+            panic!("Not enough SQE entries after ring has been flushed");
         }
 
-        self.in_flight += 1;
-        self.uncommited += 1;
+        ops.into_iter().enumerate().for_each(|(op_index, op)| {
+            let sqe = self.get_sqe().expect("Can't get SQE from io_uring");
+            let index = self.get_next_index();
+
+            let mut flags = 0;
+            if op_index as u32 == ops_count - 1 {
+                flags |= IOSQE_IO_LINK;
+            }
+
+            op.schedule(sqe, index, flags);
+            self.ops[index] = Some(op.clone());
+        });
+
+        self.in_flight += ops_count;
+        self.uncommited += ops_count;
 
         Ok(())
     }
 
-    pub fn pending_ops(&self) -> i32 {
+    pub fn schedule(&mut self, op: &ReactorOpPtr) -> Result<(), ReactorError> {
+        self.schedule_linked(slice::from_ref(op))
+    }
+
+    pub fn pending_ops(&self) -> u32 {
         self.in_flight
     }
 

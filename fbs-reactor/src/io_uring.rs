@@ -178,6 +178,12 @@ impl IoUringSQEPtr {
             io_uring_sqe_set_data64(self.sqe, data)
         }
     }
+
+    pub fn set_flags(&mut self, flags: u32) {
+        unsafe {
+            io_uring_sqe_set_flags(self.sqe, flags)
+        }
+    }
 }
 
 impl IoUringCQEPtr {
