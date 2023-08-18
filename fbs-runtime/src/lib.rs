@@ -89,24 +89,24 @@ impl<T: AsyncOpResult> Future for AsyncOp<T> {
     type Output = T::Output;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        match self.0.scheduled() {
-            true => {
-                match self.0.completed() {
-                    false => Poll::Pending,
-                    true => Poll::Ready(T::get_result(self.0.get_cqe(), self.0.fetch_parameters())),
-                }
-            },
-            false => {
-                let scheduled = REACTOR.with(|r| {
-                    r.borrow_mut().schedule(&self.0, cx.waker().clone())
+        let result = match (self.0.scheduled(), self.0.completed()) {
+            (true, true) => Poll::Ready(T::get_result(self.0.get_cqe(), self.0.fetch_parameters())),
+            (true, false) => Poll::Pending,
+            (false, _) => {
+                let waker = cx.waker().clone();
+                self.0.set_completion(move || {
+                    waker.wake_by_ref();
                 });
 
-                match scheduled {
-                    Err(error) => panic!("Error while scheduling async op: {}", error),
-                    Ok(_) => Poll::Pending,
-                }
-            },
-        }
+                REACTOR.with(|r| {
+                    r.borrow_mut().schedule(&self.0)
+                }).expect("Error while scheduling op");
+
+                Poll::Pending
+            }
+        };
+
+        result
     }
 }
 
