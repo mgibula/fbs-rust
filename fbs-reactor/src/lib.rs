@@ -36,22 +36,32 @@ impl ReactorOpParameters {
     }
 }
 
+#[derive(Clone)]
+enum OpState {
+    Unconfigured(),
+    Unscheduled(io_uring_sqe),
+    InProgress(usize),
+    Completed(IoUringCQE),
+}
+
 struct ReactorOp {
+    state: OpState,
     sqe: ReactorOpSQE,
     parameters: ReactorOpParameters,
     cqe: Option<IoUringCQE>,
     index: usize,
-    completion: Box<dyn Fn()>,
+    completion: Box<dyn Fn(IoUringCQE, ReactorOpParameters)>,
 }
 
 impl ReactorOp {
     fn new() -> Self {
         ReactorOp {
+            state: OpState::Unconfigured(),
             sqe: ReactorOpSQE::Unscheduled(unsafe { mem::zeroed() }),
             parameters: ReactorOpParameters::new(),
             cqe: None,
             index: 0,
-            completion: Box::new(|| { }),
+            completion: Box::new(|_cqe, _params| { }),
         }
     }
 }
@@ -71,24 +81,18 @@ impl ReactorOpPtr {
     }
 
     pub fn prepare_nop(&mut self) {
-        match &mut self.ptr.borrow_mut().sqe {
-            ReactorOpSQE::Scheduled(_) => panic!("Attempting to prepare already scheduled op"),
-            ReactorOpSQE::Unscheduled(sqe) => {
-                unsafe {
-                    io_uring_prep_nop(sqe);
-                }
-            }
+        unsafe {
+            let mut sqe: io_uring_sqe = mem::zeroed();
+            io_uring_prep_nop(&mut sqe);
+            self.ptr.borrow_mut().state = OpState::Unscheduled(sqe);
         }
     }
 
     pub fn prepare_close(&mut self, fd: i32) {
-        match &mut self.ptr.borrow_mut().sqe {
-            ReactorOpSQE::Scheduled(_) => panic!("Attempting to prepare already scheduled op"),
-            ReactorOpSQE::Unscheduled(sqe) => {
-                unsafe {
-                    io_uring_prep_close(sqe, fd);
-                }
-            }
+        unsafe {
+            let mut sqe: io_uring_sqe = mem::zeroed();
+            io_uring_prep_close(&mut sqe, fd);
+            self.ptr.borrow_mut().state = OpState::Unscheduled(sqe);
         }
     }
 
@@ -96,25 +100,18 @@ impl ReactorOpPtr {
         let mut op = self.ptr.borrow_mut();
         op.parameters.path = CString::new(path.as_bytes()).expect("Null character in filename");
 
-        match &mut op.sqe {
-            ReactorOpSQE::Scheduled(_) => panic!("Attempting to prepare already scheduled op"),
-            ReactorOpSQE::Unscheduled(sqe) => {
-                unsafe {
-                    io_uring_prep_openat(sqe, libc::AT_FDCWD, op.parameters.path.as_ptr(), flags, mode);
-                }
-            }
+        unsafe {
+            let mut sqe: io_uring_sqe = mem::zeroed();
+            io_uring_prep_openat(&mut sqe, libc::AT_FDCWD, op.parameters.path.as_ptr(), flags, mode);
+            self.ptr.borrow_mut().state = OpState::Unscheduled(sqe);
         }
     }
 
     pub fn prepare_socket(&mut self, domain: i32, socket_type: i32, protocol: i32) {
-        let mut op = self.ptr.borrow_mut();
-        match &mut op.sqe {
-            ReactorOpSQE::Scheduled(_) => panic!("Attempting to prepare already scheduled op"),
-            ReactorOpSQE::Unscheduled(sqe) => {
-                unsafe {
-                    io_uring_prep_socket(sqe, domain, socket_type, protocol, 0);
-                }
-            }
+        unsafe {
+            let mut sqe: io_uring_sqe = mem::zeroed();
+            io_uring_prep_socket(&mut sqe, domain, socket_type, protocol, 0);
+            self.ptr.borrow_mut().state = OpState::Unscheduled(sqe);
         }
     }
 
@@ -122,13 +119,10 @@ impl ReactorOpPtr {
         let mut op = self.ptr.borrow_mut();
         op.parameters.buffer = buffer;
 
-        match &mut op.sqe {
-            ReactorOpSQE::Scheduled(_) => panic!("Attempting to prepare already scheduled op"),
-            ReactorOpSQE::Unscheduled(sqe) => {
-                unsafe {
-                    io_uring_prep_read(sqe, fd, op.parameters.buffer.as_mut_ptr() as *mut libc::c_void, op.parameters.buffer.len() as u32, offset.unwrap_or(u64::MAX));
-                }
-            }
+        unsafe {
+            let mut sqe: io_uring_sqe = mem::zeroed();
+            io_uring_prep_read(&mut sqe, fd, op.parameters.buffer.as_mut_ptr() as *mut libc::c_void, op.parameters.buffer.len() as u32, offset.unwrap_or(u64::MAX));
+            self.ptr.borrow_mut().state = OpState::Unscheduled(sqe);
         }
     }
 
@@ -136,48 +130,55 @@ impl ReactorOpPtr {
         let mut op = self.ptr.borrow_mut();
         op.parameters.buffer = buffer;
 
-        match &mut op.sqe {
-            ReactorOpSQE::Scheduled(_) => panic!("Attempting to prepare already scheduled op"),
-            ReactorOpSQE::Unscheduled(sqe) => {
-                unsafe {
-                    io_uring_prep_write(sqe, fd, op.parameters.buffer.as_ptr() as *const libc::c_void, op.parameters.buffer.len() as u32, offset.unwrap_or(u64::MAX));
-                }
-            }
+        unsafe {
+            let mut sqe: io_uring_sqe = mem::zeroed();
+            io_uring_prep_write(&mut sqe, fd, op.parameters.buffer.as_ptr() as *const libc::c_void, op.parameters.buffer.len() as u32, offset.unwrap_or(u64::MAX));
+            self.ptr.borrow_mut().state = OpState::Unscheduled(sqe);
         }
     }
 
-    pub fn set_completion(&self, callback: impl Fn() + 'static) {
+    pub fn fetch_completion(&self) -> Box<dyn Fn(IoUringCQE, ReactorOpParameters)> {
+        let empty = Box::new(|_cqe, _params| { });
+        let old = std::mem::replace(&mut self.ptr.borrow_mut().completion, empty);
+
+        old
+    }
+
+    pub fn set_completion(&self, callback: impl Fn(IoUringCQE, ReactorOpParameters) + 'static) {
         self.ptr.borrow_mut().completion = Box::new(callback);
     }
 
     fn schedule(&self, mut target_sqe: IoUringSQEPtr, index: usize, flags: u32) {
         let mut op = self.ptr.borrow_mut();
-        match &op.sqe {
-            ReactorOpSQE::Unscheduled(sqe) => {
-                target_sqe.copy_from(sqe);
+        match op.state {
+            OpState::Unscheduled(sqe) => {
+                target_sqe.copy_from(&sqe);
                 target_sqe.set_data64(index as u64);
                 target_sqe.set_flags(flags);
             },
-            ReactorOpSQE::Scheduled(_) => {
-                panic!("Trying to schedule already scheduled op");
+            _ => {
+                panic!("Trying to schedule op in incorrect state");
             }
         }
 
-        op.index = index;
-        op.sqe = ReactorOpSQE::Scheduled(target_sqe);
+        op.state = OpState::InProgress(index);
+
+        // op.index = index;
+        // op.sqe = ReactorOpSQE::Scheduled(target_sqe);
     }
 
     fn opcode(&self) -> u8 {
-        let mut op = self.ptr.borrow_mut();
-        match &mut op.sqe {
-            ReactorOpSQE::Scheduled(sqe) => {
-                return sqe.opcode();
-            },
-            ReactorOpSQE::Unscheduled(sqe) => {
-                // opcode is u8 field at offset zero
-                return unsafe { *(sqe as *const io_uring_sqe as *const u8) };
-            }
-        }
+        unimplemented!()
+        // let mut op = self.ptr.borrow_mut();
+        // match &mut op.sqe {
+        //     ReactorOpSQE::Scheduled(sqe) => {
+        //         return sqe.opcode();
+        //     },
+        //     ReactorOpSQE::Unscheduled(sqe) => {
+        //         // opcode is u8 field at offset zero
+        //         return unsafe { *(sqe as *const io_uring_sqe as *const u8) };
+        //     }
+        // }
     }
 
     pub fn scheduled(&self) -> bool {
@@ -191,16 +192,12 @@ impl ReactorOpPtr {
         self.ptr.borrow().cqe.is_some()
     }
 
-    fn set_cqe(&self, cqe: IoUringCQEPtr) {
-        self.ptr.borrow_mut().cqe = Some(cqe.copy_from());
-    }
-
     pub fn get_cqe(&self) -> IoUringCQE {
         self.ptr.borrow().cqe.unwrap()
     }
 
-    fn complete_op(&self) {
-        (&self.ptr.borrow_mut().completion)();
+    fn complete_op(&mut self, cqe: IoUringCQE, params: ReactorOpParameters) {
+        (&self.ptr.borrow_mut().completion)(cqe, params);
     }
 }
 
@@ -319,13 +316,13 @@ impl Reactor {
         self.in_flight -= 1;
 
         let index = cqe.get_data64() as usize;
-        let op = self.ops[index].take().expect("io_uring returned completed op with incorrect index");
-        op.set_cqe(cqe);
+        let mut op = self.ops[index].take().expect("io_uring returned completed op with incorrect index");
 
         self.ops_free_entries.push(index);
         self.ring.cqe_seen(cqe);
 
-        op.complete_op();
+        let params = op.fetch_parameters();
+        op.complete_op(cqe.copy_from(), params);
     }
 
     fn wait_for_completion(&mut self) -> Result<(), IoUringError> {

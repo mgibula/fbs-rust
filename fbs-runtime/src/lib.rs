@@ -11,10 +11,12 @@ use fbs_reactor::*;
 mod ops;
 mod open_mode;
 mod socket;
+mod linked_ops;
 
 pub use ops::*;
 pub use open_mode::*;
 pub use socket::*;
+pub use linked_ops::*;
 
 #[derive(Error, Debug)]
 pub enum RuntimeError {
@@ -94,7 +96,10 @@ impl<T: AsyncOpResult> Future for AsyncOp<T> {
             (true, false) => Poll::Pending,
             (false, _) => {
                 let waker = cx.waker().clone();
-                self.0.set_completion(move || {
+                let old_completion = self.0.fetch_completion();
+
+                self.0.set_completion(move |cqe, params| {
+                    old_completion(cqe, params);
                     waker.wake_by_ref();
                 });
 
@@ -242,5 +247,18 @@ mod tests {
 
         // ensure it actually executed
         assert_eq!(result, 1);
+    }
+
+    fn local_linked_ops_test() {
+        let result = async_run(async {
+            let mut ops = AsyncLinkedOps::new();
+            let r1 = ops.add(async_read(12, vec![]));
+            let r2 = ops.add(async_close(12));
+
+            ops.await;
+
+            1
+        });
+
     }
 }
