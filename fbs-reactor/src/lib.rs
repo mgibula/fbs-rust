@@ -19,15 +19,18 @@ pub enum ReactorError {
     NoSQEAvailable,
 }
 
-enum ReactorOpSQE {
-    Unscheduled(io_uring_sqe),
-    Scheduled(IoUringSQEPtr),
+pub enum IOUringOp<'op> {
+    Nop(),
+    Close(i32),                         // fd
+    Open(&'op OsStr, i32, u32),    // path, flags, mode
+    Read(i32, Vec<u8>, Option<u64>),    // fd, buffer, offset
+    Write(i32, Vec<u8>, Option<u64>),   // fd, buffer, offset
 }
 
 #[derive(Default)]
 pub struct ReactorOpParameters {
     path: CString,
-    pub buffer: Vec<u8>,
+    buffer: Vec<u8>,
 }
 
 impl ReactorOpParameters {
@@ -36,32 +39,24 @@ impl ReactorOpParameters {
     }
 }
 
-#[derive(Clone)]
 enum OpState {
-    Unconfigured(),
-    Unscheduled(io_uring_sqe),
-    InProgress(usize),
+    Unscheduled(),
+    Scheduled(Option<Box<dyn Fn(&mut IoUringCQE, &mut ReactorOpParameters)>>),
     Completed(IoUringCQE),
 }
 
 struct ReactorOp {
     state: OpState,
-    sqe: ReactorOpSQE,
     parameters: ReactorOpParameters,
-    cqe: Option<IoUringCQE>,
-    index: usize,
-    completion: Box<dyn Fn(IoUringCQE, ReactorOpParameters)>,
+    result_is_fd: bool,
 }
 
 impl ReactorOp {
     fn new() -> Self {
         ReactorOp {
-            state: OpState::Unconfigured(),
-            sqe: ReactorOpSQE::Unscheduled(unsafe { mem::zeroed() }),
+            state: OpState::Unscheduled(),
             parameters: ReactorOpParameters::new(),
-            cqe: None,
-            index: 0,
-            completion: Box::new(|_cqe, _params| { }),
+            result_is_fd: false,
         }
     }
 }
@@ -84,7 +79,7 @@ impl ReactorOpPtr {
         unsafe {
             let mut sqe: io_uring_sqe = mem::zeroed();
             io_uring_prep_nop(&mut sqe);
-            self.ptr.borrow_mut().state = OpState::Unscheduled(sqe);
+            // self.ptr.borrow_mut().state = OpState::Unscheduled(sqe);
         }
     }
 
@@ -92,7 +87,7 @@ impl ReactorOpPtr {
         unsafe {
             let mut sqe: io_uring_sqe = mem::zeroed();
             io_uring_prep_close(&mut sqe, fd);
-            self.ptr.borrow_mut().state = OpState::Unscheduled(sqe);
+            // self.ptr.borrow_mut().state = OpState::Unscheduled(sqe);
         }
     }
 
@@ -103,7 +98,7 @@ impl ReactorOpPtr {
         unsafe {
             let mut sqe: io_uring_sqe = mem::zeroed();
             io_uring_prep_openat(&mut sqe, libc::AT_FDCWD, op.parameters.path.as_ptr(), flags, mode);
-            self.ptr.borrow_mut().state = OpState::Unscheduled(sqe);
+            // self.ptr.borrow_mut().state = OpState::Unscheduled(sqe);
         }
     }
 
@@ -111,7 +106,7 @@ impl ReactorOpPtr {
         unsafe {
             let mut sqe: io_uring_sqe = mem::zeroed();
             io_uring_prep_socket(&mut sqe, domain, socket_type, protocol, 0);
-            self.ptr.borrow_mut().state = OpState::Unscheduled(sqe);
+            // self.ptr.borrow_mut().state = OpState::Unscheduled(sqe);
         }
     }
 
@@ -122,7 +117,7 @@ impl ReactorOpPtr {
         unsafe {
             let mut sqe: io_uring_sqe = mem::zeroed();
             io_uring_prep_read(&mut sqe, fd, op.parameters.buffer.as_mut_ptr() as *mut libc::c_void, op.parameters.buffer.len() as u32, offset.unwrap_or(u64::MAX));
-            self.ptr.borrow_mut().state = OpState::Unscheduled(sqe);
+            // self.ptr.borrow_mut().state = OpState::Unscheduled(sqe);
         }
     }
 
@@ -133,38 +128,34 @@ impl ReactorOpPtr {
         unsafe {
             let mut sqe: io_uring_sqe = mem::zeroed();
             io_uring_prep_write(&mut sqe, fd, op.parameters.buffer.as_ptr() as *const libc::c_void, op.parameters.buffer.len() as u32, offset.unwrap_or(u64::MAX));
-            self.ptr.borrow_mut().state = OpState::Unscheduled(sqe);
+            // self.ptr.borrow_mut().state = OpState::Unscheduled(sqe);
         }
     }
 
-    pub fn fetch_completion(&self) -> Box<dyn Fn(IoUringCQE, ReactorOpParameters)> {
-        let empty = Box::new(|_cqe, _params| { });
-        let old = std::mem::replace(&mut self.ptr.borrow_mut().completion, empty);
-
-        old
+    pub fn fetch_completion(&self) -> Option<Box<dyn Fn(&mut IoUringCQE, &mut ReactorOpParameters)>> {
+        unimplemented!()
+        // self.ptr.borrow_mut().completion.take()
     }
 
-    pub fn set_completion(&self, callback: impl Fn(IoUringCQE, ReactorOpParameters) + 'static) {
-        self.ptr.borrow_mut().completion = Box::new(callback);
+    pub fn set_completion(&self, callback: impl Fn(&mut IoUringCQE, &mut ReactorOpParameters) + 'static) {
+        unimplemented!()
+        // self.ptr.borrow_mut().completion = Some(Box::new(callback));
     }
 
     fn schedule(&self, mut target_sqe: IoUringSQEPtr, index: usize, flags: u32) {
-        let mut op = self.ptr.borrow_mut();
-        match op.state {
-            OpState::Unscheduled(sqe) => {
-                target_sqe.copy_from(&sqe);
-                target_sqe.set_data64(index as u64);
-                target_sqe.set_flags(flags);
-            },
-            _ => {
-                panic!("Trying to schedule op in incorrect state");
-            }
-        }
+        // let mut op = self.ptr.borrow_mut();
+        // match op.state {
+        //     OpState::Unscheduled(sqe) => {
+        //         target_sqe.copy_from(&sqe);
+        //         target_sqe.set_data64(index as u64);
+        //         target_sqe.set_flags(flags);
+        //     },
+        //     _ => {
+        //         panic!("Trying to schedule op in incorrect state");
+        //     }
+        // }
 
-        op.state = OpState::InProgress(index);
-
-        // op.index = index;
-        // op.sqe = ReactorOpSQE::Scheduled(target_sqe);
+        // op.state = OpState::InProgress();
     }
 
     fn opcode(&self) -> u8 {
@@ -182,22 +173,26 @@ impl ReactorOpPtr {
     }
 
     pub fn scheduled(&self) -> bool {
-        match self.ptr.borrow().sqe {
-            ReactorOpSQE::Scheduled(_) => true,
-            ReactorOpSQE::Unscheduled(_) => false,
-        }
+        unimplemented!()
+        // match self.ptr.borrow().state {
+        //     OpState::InProgress() => true,
+        //     _ => false,
+        // }
     }
 
     pub fn completed(&self) -> bool {
-        self.ptr.borrow().cqe.is_some()
+        unimplemented!()
+        // match self.ptr.borrow().state {
+        //     OpState::Completed(_) => true,
+        //     _ => false,
+        // }
     }
 
-    pub fn get_cqe(&self) -> IoUringCQE {
-        self.ptr.borrow().cqe.unwrap()
-    }
-
-    fn complete_op(&mut self, cqe: IoUringCQE, params: ReactorOpParameters) {
-        (&self.ptr.borrow_mut().completion)(cqe, params);
+    fn complete_op(&mut self, mut cqe: IoUringCQE, mut params: ReactorOpParameters) {
+        // self.ptr.borrow_mut().state = OpState::Completed(cqe);
+        // if let Some(completion) = &self.ptr.borrow_mut().completion {
+        //     completion(&mut cqe, &mut params);
+        // }
     }
 }
 
@@ -233,6 +228,67 @@ impl Reactor {
         };
 
         index
+    }
+
+    pub fn schedule_linked2(&mut self, ops: &mut [IOUringOp], result: &mut [ReactorOpPtr], mut completion: Option<Box<dyn Fn(&mut IoUringCQE, &mut ReactorOpParameters)>>) {
+        let ops_count = ops.len() as u32;
+
+        if self.ring.sq_space_left() < ops_count {
+            self.submit();
+        }
+
+        if self.ring.sq_space_left() < ops_count {
+            panic!("Not enough SQE entries after ring has been flushed");
+        }
+
+        ops.into_iter().zip(result.into_iter()).enumerate().for_each(|(op_index, (op, result))| {
+            *result = ReactorOpPtr::new();
+
+            let sqe = self.get_sqe().expect("Can't get SQE from io_uring");
+            let index = self.get_next_index();
+            let mut rop = result.ptr.borrow_mut();
+
+            let mut flags = 0;
+            if op_index as u32 != ops_count - 1 {
+                flags |= IOSQE_IO_LINK;
+                rop.state = OpState::Scheduled(None);
+            } else {
+                rop.state = OpState::Scheduled(completion.take());
+            }
+
+            unsafe {
+                match op {
+                    IOUringOp::Nop() => {
+                        io_uring_prep_nop(sqe.ptr);
+                    },
+                    IOUringOp::Close(fd) => {
+                        io_uring_prep_close(sqe.ptr, *fd);
+                    },
+                    IOUringOp::Open(path, flags, mode) => {
+                        rop.parameters.path = CString::new(path.as_bytes()).expect("Null character in filename");
+                        rop.result_is_fd = true;
+
+                        io_uring_prep_openat(sqe.ptr, libc::AT_FDCWD, rop.parameters.path.as_ptr(), *flags, *mode);
+                    },
+                    IOUringOp::Read(fd, buffer, offset) => {
+                        rop.parameters.buffer = std::mem::take(buffer);
+
+                        io_uring_prep_read(sqe.ptr, *fd, rop.parameters.buffer.as_mut_ptr() as *mut libc::c_void, rop.parameters.buffer.len() as u32, offset.unwrap_or(u64::MAX));
+                    },
+                    IOUringOp::Write(fd, buffer, offset) => {
+                        rop.parameters.buffer = std::mem::take(buffer);
+
+                        io_uring_prep_write(sqe.ptr, *fd, rop.parameters.buffer.as_ptr() as *mut libc::c_void, rop.parameters.buffer.len() as u32, offset.unwrap_or(u64::MAX));
+                    },
+                }
+
+                io_uring_sqe_set_data64(sqe.ptr, index as u64);
+                io_uring_sqe_set_flags(sqe.ptr, flags);
+            }
+
+            self.ops[index] = Some(result.clone());
+        });
+
     }
 
     pub fn schedule_linked(&mut self, ops: &[ReactorOpPtr]) -> Result<(), ReactorError> {

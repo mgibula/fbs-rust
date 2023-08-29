@@ -20,7 +20,7 @@ pub struct IoUring {
 
 #[derive(Debug, Clone, Copy)]
 pub struct IoUringSQEPtr {
-    sqe: *mut io_uring_sqe,
+    pub ptr: *mut io_uring_sqe,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -115,7 +115,7 @@ impl IoUring {
             let ptr = io_uring_get_sqe(&mut self.ring);
             if !ptr.is_null() {
                 return Some(IoUringSQEPtr {
-                    sqe: ptr,
+                    ptr,
                 });
             }
 
@@ -165,23 +165,23 @@ impl IoUring {
 impl IoUringSQEPtr {
     #[inline]
     pub fn opcode(&self) -> u8 {
-        return unsafe { *(self.sqe as *const io_uring_sqe as *const u8) };
+        return unsafe { *(self.ptr as *const io_uring_sqe as *const u8) };
     }
 
     #[inline]
     pub fn copy_from(&mut self, sqe: &io_uring_sqe) {
-        unsafe { *self.sqe = *sqe };
+        unsafe { *self.ptr = *sqe };
     }
 
     pub fn set_data64(&mut self, data: u64) {
         unsafe {
-            io_uring_sqe_set_data64(self.sqe, data)
+            io_uring_sqe_set_data64(self.ptr, data)
         }
     }
 
     pub fn set_flags(&mut self, flags: u32) {
         unsafe {
-            io_uring_sqe_set_flags(self.sqe, flags)
+            io_uring_sqe_set_flags(self.ptr, flags)
         }
     }
 }
