@@ -19,10 +19,19 @@ pub enum ReactorError {
     NoSQEAvailable,
 }
 
+pub type OpCompletion = Option<Box<dyn Fn(IoUringCQE, ReactorOpParameters)>>; 
+
+pub struct IOUringReq<'op> {
+    pub completion: OpCompletion,
+    pub op: IOUringOp<'op>,
+}
+
 pub enum IOUringOp<'op> {
+    InProgress(ReactorOpPtr),
+
     Nop(),
     Close(i32),                         // fd
-    Open(&'op OsStr, i32, u32),    // path, flags, mode
+    Open(&'op OsStr, i32, u32),         // path, flags, mode
     Read(i32, Vec<u8>, Option<u64>),    // fd, buffer, offset
     Write(i32, Vec<u8>, Option<u64>),   // fd, buffer, offset
 }
@@ -30,7 +39,7 @@ pub enum IOUringOp<'op> {
 #[derive(Default)]
 pub struct ReactorOpParameters {
     path: CString,
-    buffer: Vec<u8>,
+    pub buffer: Vec<u8>,
 }
 
 impl ReactorOpParameters {
@@ -41,8 +50,8 @@ impl ReactorOpParameters {
 
 enum OpState {
     Unscheduled(),
-    Scheduled(Option<Box<dyn Fn(&mut IoUringCQE, &mut ReactorOpParameters)>>),
-    Completed(IoUringCQE),
+    Scheduled(OpCompletion),
+    Completed(),
 }
 
 struct ReactorOp {
@@ -188,11 +197,11 @@ impl ReactorOpPtr {
         // }
     }
 
-    fn complete_op(&mut self, mut cqe: IoUringCQE, mut params: ReactorOpParameters) {
-        // self.ptr.borrow_mut().state = OpState::Completed(cqe);
-        // if let Some(completion) = &self.ptr.borrow_mut().completion {
-        //     completion(&mut cqe, &mut params);
-        // }
+    fn complete_op(&mut self, cqe: IoUringCQE, params: ReactorOpParameters) {
+        let completion = std::mem::replace(&mut self.ptr.borrow_mut().state, OpState::Completed());
+        if let OpState::Scheduled(Some(completion)) = completion {
+            completion(cqe, params);
+        }
     }
 }
 
@@ -230,7 +239,7 @@ impl Reactor {
         index
     }
 
-    pub fn schedule_linked2(&mut self, ops: &mut [IOUringOp], result: &mut [ReactorOpPtr], mut completion: Option<Box<dyn Fn(&mut IoUringCQE, &mut ReactorOpParameters)>>) {
+    pub fn schedule_linked2(&mut self, ops: &mut [IOUringReq]) {
         let ops_count = ops.len() as u32;
 
         if self.ring.sq_space_left() < ops_count {
@@ -241,23 +250,18 @@ impl Reactor {
             panic!("Not enough SQE entries after ring has been flushed");
         }
 
-        ops.into_iter().zip(result.into_iter()).enumerate().for_each(|(op_index, (op, result))| {
-            *result = ReactorOpPtr::new();
+        self.in_flight += ops_count;
+        self.uncommited += ops_count;
+
+        ops.into_iter().enumerate().for_each(|(op_index, req)| {
+            let rop = ReactorOpPtr::new();
 
             let sqe = self.get_sqe().expect("Can't get SQE from io_uring");
             let index = self.get_next_index();
-            let mut rop = result.ptr.borrow_mut();
-
-            let mut flags = 0;
-            if op_index as u32 != ops_count - 1 {
-                flags |= IOSQE_IO_LINK;
-                rop.state = OpState::Scheduled(None);
-            } else {
-                rop.state = OpState::Scheduled(completion.take());
-            }
 
             unsafe {
-                match op {
+                let mut rop = rop.ptr.borrow_mut();
+                match &mut req.op {
                     IOUringOp::Nop() => {
                         io_uring_prep_nop(sqe.ptr);
                     },
@@ -265,8 +269,8 @@ impl Reactor {
                         io_uring_prep_close(sqe.ptr, *fd);
                     },
                     IOUringOp::Open(path, flags, mode) => {
-                        rop.parameters.path = CString::new(path.as_bytes()).expect("Null character in filename");
                         rop.result_is_fd = true;
+                        rop.parameters.path = CString::new(path.as_bytes()).expect("Null character in filename");
 
                         io_uring_prep_openat(sqe.ptr, libc::AT_FDCWD, rop.parameters.path.as_ptr(), *flags, *mode);
                     },
@@ -280,13 +284,22 @@ impl Reactor {
 
                         io_uring_prep_write(sqe.ptr, *fd, rop.parameters.buffer.as_ptr() as *mut libc::c_void, rop.parameters.buffer.len() as u32, offset.unwrap_or(u64::MAX));
                     },
+                    IOUringOp::InProgress(_) => panic!("op already scheduled"),
+                }
+
+                rop.state = OpState::Scheduled(req.completion.take());
+
+                let mut flags = 0;
+                if op_index as u32 != ops_count - 1 {
+                    flags |= IOSQE_IO_LINK;
                 }
 
                 io_uring_sqe_set_data64(sqe.ptr, index as u64);
                 io_uring_sqe_set_flags(sqe.ptr, flags);
             }
 
-            self.ops[index] = Some(result.clone());
+            self.ops[index] = Some(rop.clone());
+            req.op = IOUringOp::InProgress(rop);
         });
 
     }
@@ -377,7 +390,7 @@ impl Reactor {
         self.ops_free_entries.push(index);
         self.ring.cqe_seen(cqe);
 
-        let params = op.fetch_parameters();
+        let params = std::mem::take(&mut op.ptr.borrow_mut().parameters);
         op.complete_op(cqe.copy_from(), params);
     }
 

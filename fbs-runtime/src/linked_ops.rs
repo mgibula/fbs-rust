@@ -1,4 +1,5 @@
 use super::ReactorOpPtr;
+use super::IOUringOp;
 use super::AsyncOpResult;
 use super::AsyncOp;
 
@@ -10,8 +11,8 @@ use std::rc::Rc;
 
 use super::REACTOR;
 
-pub struct AsyncLinkedOps {
-    ops: Vec<ReactorOpPtr>,
+pub struct AsyncLinkedOps<'ops> {
+    ops: Vec<IOUringOp<'ops>>,
 }
 
 pub struct DelayedResult<T> {
@@ -47,12 +48,12 @@ impl AsyncLinkedOps {
         let result = DelayedResult::new();
         let result2 = result.clone();
 
-        let op = op.0.clone();
-        op.set_completion(move |cqe, params| {
-            result2.set_value(T::get_result(cqe, params));
-        });
+        // let op = op.0.clone();
+        // // op.set_completion(move |cqe, params| {
+        // //     result2.set_value(T::get_result(cqe, params));
+        // // });
 
-        self.ops.push(op);
+        // self.ops.push(op);
         result
     }
 }

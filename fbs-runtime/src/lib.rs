@@ -1,6 +1,8 @@
 use std::future::Future;
 use std::cell::RefCell;
 use std::pin::Pin;
+use std::rc::Rc;
+use std::cell::Cell;
 use std::task::{Context, Poll};
 use std::marker::PhantomData;
 use thiserror::Error;
@@ -86,6 +88,35 @@ pub trait AsyncOpResult : Unpin {
 }
 
 pub struct AsyncOp<T: AsyncOpResult> (ReactorOpPtr, PhantomData<T>);
+
+pub struct AsyncOp2<'op, T: AsyncOpResult> (IOUringReq<'op>, Rc<Cell<T::Output>>, PhantomData<T>);
+
+impl<'op, T: AsyncOpResult> Future for AsyncOp2<'op, T> {
+    type Output = T::Output;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        match self.0.op {
+            IOUringOp::InProgress(rop) => {
+                unimplemented!()
+            },
+            _ => {
+                let waker = cx.waker().clone();
+                let result = self.1.clone();
+
+                self.0.completion = Some(Box::new(move |cqe, params| {
+                    result.set(T::get_result(cqe, params));
+                    waker.clone();                    
+                }));
+
+                REACTOR.with(|r| {
+                    r.borrow_mut().schedule_linked2(std::slice::from_mut(&mut self.0))
+                });
+
+                Poll::Pending
+            },
+        }
+    }
+}
 
 impl<T: AsyncOpResult> Future for AsyncOp<T> {
     type Output = T::Output;
