@@ -1,3 +1,4 @@
+use std::os::fd::{OwnedFd, FromRawFd};
 use std::os::unix::prelude::OsStrExt;
 use std::path::Path;
 use std::ffi::CString;
@@ -21,6 +22,23 @@ impl AsyncOpResult for ResultErrno {
     fn get_result(cqe: IoUringCQE, _params: ReactorOpParameters) -> Self::Output {
         let result: Result<i32, i32> = if cqe.result >= 0 {
             Ok(cqe.result)
+        } else {
+            Err(-cqe.result)
+        };
+
+        result
+    }
+}
+
+pub struct ResultDescriptor {
+}
+
+impl AsyncOpResult for ResultDescriptor {
+    type Output = Result<OwnedFd, i32>;
+
+    fn get_result(cqe: IoUringCQE, _params: ReactorOpParameters) -> Self::Output {
+        let result: Result<OwnedFd, i32> = if cqe.result >= 0 {
+            Ok(unsafe { OwnedFd::from_raw_fd(cqe.result) } )
         } else {
             Err(-cqe.result)
         };
@@ -56,7 +74,7 @@ pub fn async_close(fd: i32) -> AsyncOp::<ResultErrno> {
     AsyncOp::new(IOUringOp::Close(fd))
 }
 
-pub fn async_open<P: AsRef<Path>>(path: P, options: &OpenMode) -> AsyncOp::<ResultErrno> {
+pub fn async_open<P: AsRef<Path>>(path: P, options: &OpenMode) -> AsyncOp::<ResultDescriptor> {
     let path = CString::new(path.as_ref().as_os_str().as_bytes()).expect("Null character in filename");
     AsyncOp::new(IOUringOp::Open(path, options.flags(), options.mode()))
 }
