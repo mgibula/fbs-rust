@@ -238,7 +238,7 @@ mod tests {
     #[test]
     fn local_socket_test() {
         let result = async_run(async {
-            if async_op_supported(IOUringOpType::Socket) {
+            if async_op_supported(IOUringOpType::SOCKET) {
                 let op = async_socket(SocketDomain::Inet, SocketType::Stream, SocketOptions::new());
                 let sockfd = op.await;
                 assert!(sockfd.is_ok());

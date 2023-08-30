@@ -29,12 +29,12 @@ pub struct IOUringReq {
 pub struct IOUringOpType;
 
 impl IOUringOpType {
-    pub const Nop: u32 = io_uring_op_IORING_OP_NOP;
-    pub const Close: u32 = io_uring_op_IORING_OP_CLOSE;
-    pub const Open: u32 = io_uring_op_IORING_OP_OPENAT;
-    pub const Read: u32 = io_uring_op_IORING_OP_READ;
-    pub const Write: u32 = io_uring_op_IORING_OP_WRITE;
-    pub const Socket: u32 = io_uring_op_IORING_OP_SOCKET;
+    pub const NOP: u32 = io_uring_op_IORING_OP_NOP;
+    pub const CLOSE: u32 = io_uring_op_IORING_OP_CLOSE;
+    pub const OPEN: u32 = io_uring_op_IORING_OP_OPENAT;
+    pub const READ: u32 = io_uring_op_IORING_OP_READ;
+    pub const WRITE: u32 = io_uring_op_IORING_OP_WRITE;
+    pub const SOCKET: u32 = io_uring_op_IORING_OP_SOCKET;
 }
 
 pub enum IOUringOp {
