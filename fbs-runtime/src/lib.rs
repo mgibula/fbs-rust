@@ -212,9 +212,28 @@ mod tests {
     }
 
     #[test]
+    fn local_openat2_and_close_test() {
+        let result = async_run(async {
+            let mut options = OpenMode::new();
+            options.create(true, 0o777);
+
+            let result = async_open("/tmp/testowy-uring.txt", &options).await;
+            assert!(result.is_ok());
+
+            let result = async_close(result.unwrap()).await;
+            assert!(result.is_ok());
+
+            1
+        });
+
+        // ensure it actually executed
+        assert_eq!(result, 1);
+    }
+
+    #[test]
     fn local_close_test() {
         let result = async_run(async {
-            let result = async_close(123).await;
+            let result = async_close_raw_fd(123).await;
             assert!(result.is_err());
             1
         });
@@ -226,7 +245,7 @@ mod tests {
     #[test]
     fn local_close_test2() {
         let result = async_run(async {
-            let result = async_close(0).await;
+            let result = async_close_raw_fd(0).await;
             assert!(result.is_ok());
             1
         });
@@ -270,7 +289,7 @@ mod tests {
         let result = async_run(async {
             let mut ops = AsyncLinkedOps::new();
             let r1 = ops.add(async_read(12, vec![]));
-            let r2 = ops.add(async_close(12));
+            let r2 = ops.add(async_close_raw_fd(12));
 
             let succeeded = ops.await;
 

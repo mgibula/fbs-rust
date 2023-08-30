@@ -1,4 +1,4 @@
-use std::os::fd::{OwnedFd, FromRawFd};
+use std::os::fd::{OwnedFd, FromRawFd, IntoRawFd};
 use std::os::unix::prelude::OsStrExt;
 use std::path::Path;
 use std::ffi::CString;
@@ -70,8 +70,12 @@ pub fn async_nop() -> AsyncOp::<ResultErrno> {
     AsyncOp::new(IOUringOp::Nop())
 }
 
-pub fn async_close(fd: i32) -> AsyncOp::<ResultErrno> {
+pub fn async_close_raw_fd(fd: i32) -> AsyncOp::<ResultErrno> {
     AsyncOp::new(IOUringOp::Close(fd))
+}
+
+pub fn async_close(fd: OwnedFd) -> AsyncOp::<ResultErrno> {
+    AsyncOp::new(IOUringOp::Close(fd.into_raw_fd()))
 }
 
 pub fn async_open<P: AsRef<Path>>(path: P, options: &OpenMode) -> AsyncOp::<ResultDescriptor> {
