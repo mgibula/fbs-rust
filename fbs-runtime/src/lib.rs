@@ -274,18 +274,13 @@ mod tests {
 
             ops.await;
 
-            match r1.value() {
-                Ok(_) => println!("r1 value ok"),
-                Err(code) => println!("r1 value err {}", code.0),
-            }
-
-            match r2.value() {
-                Ok(_) => println!("r2 value ok"),
-                Err(code) => println!("r2 value err: {}", code),
-            }
+            assert_eq!(r1.value(), Err((libc::EBADF, vec![])));
+            assert_eq!(r2.value(), Err(libc::ECANCELED));
 
             1
         });
 
+        // ensure it actually executed
+        assert_eq!(result, 1);
     }
 }
