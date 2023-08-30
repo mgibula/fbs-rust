@@ -47,11 +47,10 @@ pub fn async_yield() -> Yield {
     })
 }
 
-pub fn async_op_supported<T: AsyncOpResult>(op: &AsyncOp<T>) -> bool {
-    unimplemented!()
-    // REACTOR.with(|r| {
-    //     r.borrow().is_supported(&op.0)
-    // })
+pub fn async_op_supported(opcode: u32) -> bool {
+    REACTOR.with(|r| {
+        r.borrow().is_supported(opcode)
+    })
 }
 
 pub fn async_run<T: 'static>(future: impl Future<Output = T> + 'static) -> T {
@@ -239,8 +238,8 @@ mod tests {
     #[test]
     fn local_socket_test() {
         let result = async_run(async {
-            let op = async_socket(SocketDomain::Inet, SocketType::Stream, SocketOptions::new());
-            if async_op_supported(&op) {
+            if async_op_supported(IOUringOpType::Socket) {
+                let op = async_socket(SocketDomain::Inet, SocketType::Stream, SocketOptions::new());
                 let sockfd = op.await;
                 assert!(sockfd.is_ok());
             }

@@ -98,8 +98,8 @@ impl IoUring {
         }
     }
 
-    pub fn is_op_supported(&self, opcode: u8) -> bool {
-        unsafe { io_uring_opcode_supported(self.probe, opcode as i32) > 0 }
+    pub fn is_op_supported(&self, opcode: u32) -> bool {
+        unsafe { io_uring_opcode_supported(self.probe, opcode as libc::c_int) > 0 }
     }
 
     pub fn sq_space_left(&self) -> u32 {
@@ -158,30 +158,6 @@ impl IoUring {
     pub fn cqe_seen(&mut self, entry: IoUringCQEPtr) {
         unsafe {
             io_uring_cqe_seen(&mut self.ring, entry.cqe)
-        }
-    }
-}
-
-impl IoUringSQEPtr {
-    #[inline]
-    pub fn opcode(&self) -> u8 {
-        return unsafe { *(self.ptr as *const io_uring_sqe as *const u8) };
-    }
-
-    #[inline]
-    pub fn copy_from(&mut self, sqe: &io_uring_sqe) {
-        unsafe { *self.ptr = *sqe };
-    }
-
-    pub fn set_data64(&mut self, data: u64) {
-        unsafe {
-            io_uring_sqe_set_data64(self.ptr, data)
-        }
-    }
-
-    pub fn set_flags(&mut self, flags: u32) {
-        unsafe {
-            io_uring_sqe_set_flags(self.ptr, flags)
         }
     }
 }

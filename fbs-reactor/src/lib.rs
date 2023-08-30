@@ -25,6 +25,18 @@ pub struct IOUringReq {
     pub op: IOUringOp,
 }
 
+#[non_exhaustive]
+pub struct IOUringOpType;
+
+impl IOUringOpType {
+    pub const Nop: u32 = io_uring_op_IORING_OP_NOP;
+    pub const Close: u32 = io_uring_op_IORING_OP_CLOSE;
+    pub const Open: u32 = io_uring_op_IORING_OP_OPENAT;
+    pub const Read: u32 = io_uring_op_IORING_OP_READ;
+    pub const Write: u32 = io_uring_op_IORING_OP_WRITE;
+    pub const Socket: u32 = io_uring_op_IORING_OP_SOCKET;
+}
+
 pub enum IOUringOp {
     InProgress(ReactorOpPtr),
 
@@ -78,20 +90,6 @@ impl ReactorOpPtr {
         ReactorOpPtr { ptr: Rc::new(RefCell::new(ReactorOp::new())) }
     }
 
-    fn opcode(&self) -> u8 {
-        unimplemented!()
-        // let mut op = self.ptr.borrow_mut();
-        // match &mut op.sqe {
-        //     ReactorOpSQE::Scheduled(sqe) => {
-        //         return sqe.opcode();
-        //     },
-        //     ReactorOpSQE::Unscheduled(sqe) => {
-        //         // opcode is u8 field at offset zero
-        //         return unsafe { *(sqe as *const io_uring_sqe as *const u8) };
-        //     }
-        // }
-    }
-
     pub fn completed(&self) -> bool {
         if let OpState::Completed() = self.ptr.borrow().state {
             return true;
@@ -126,8 +124,8 @@ impl Reactor {
         Ok(Reactor { ring: IoUring::new(params)?, ops: vec![], ops_free_entries: vec![], in_flight: 0, uncommited: 0 })
     }
 
-    pub fn is_supported(&self, op: &ReactorOpPtr) -> bool {
-        self.ring.is_op_supported(op.opcode())
+    pub fn is_supported(&self, opcode: u32) -> bool {
+        self.ring.is_op_supported(opcode)
     }
 
     fn get_next_index(&mut self) -> usize {
@@ -155,7 +153,6 @@ impl Reactor {
 
         self.in_flight += ops_count;
         self.uncommited += ops_count;
-
 
         ops.into_iter().enumerate().for_each(|(op_index, req)| {
             let rop = ReactorOpPtr::new();
