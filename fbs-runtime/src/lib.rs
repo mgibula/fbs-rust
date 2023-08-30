@@ -109,7 +109,7 @@ impl<T: AsyncOpResult> Future for AsyncOp<T> {
         match &self.0.op {
             IOUringOp::InProgress(rop) => {
                 match rop.completed() {
-                    true => Poll::Ready(self.1.take().take().unwrap()),
+                    true => Poll::Ready(self.1.take().unwrap()),
                     false => Poll::Pending,
                 }
             },

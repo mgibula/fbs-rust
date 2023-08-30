@@ -1,4 +1,3 @@
-use super::ReactorOpPtr;
 use super::AsyncOpResult;
 use super::AsyncOp;
 use super::IOUringReq;
@@ -7,7 +6,6 @@ use super::IOUringOp;
 use std::task::{Context, Poll};
 use std::pin::Pin;
 use std::future::Future;
-use std::cell::RefCell;
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -62,7 +60,7 @@ impl Future for AsyncLinkedOps {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         // return immediately if there are no ops
-        let mut last_op = match self.ops.last_mut() {
+        let last_op = match self.ops.last_mut() {
             None => return Poll::Ready(()),
             Some(op) => op,
         };
@@ -74,7 +72,7 @@ impl Future for AsyncLinkedOps {
                     false => { return Poll::Pending },
                 }
             },
-            _ => { }
+            _ => { /* handled below */ }
         }
 
         let prev_cb = last_op.completion.take();

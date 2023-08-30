@@ -3,7 +3,6 @@ use std::ffi::{CString, OsStr};
 use std::rc::Rc;
 use std::mem::{self};
 use std::os::unix::prelude::OsStrExt;
-use std::slice;
 
 use liburing_sys::*;
 use io_uring::*;
@@ -58,7 +57,6 @@ enum OpState {
 struct ReactorOp {
     state: OpState,
     parameters: ReactorOpParameters,
-    result_is_fd: bool,
 }
 
 impl ReactorOp {
@@ -66,7 +64,6 @@ impl ReactorOp {
         ReactorOp {
             state: OpState::Unscheduled(),
             parameters: ReactorOpParameters::new(),
-            result_is_fd: false,
         }
     }
 }
@@ -81,67 +78,6 @@ impl ReactorOpPtr {
         ReactorOpPtr { ptr: Rc::new(RefCell::new(ReactorOp::new())) }
     }
 
-    pub fn fetch_parameters(&mut self) -> ReactorOpParameters {
-        std::mem::take(&mut self.ptr.borrow_mut().parameters)
-    }
-
-    pub fn prepare_nop(&mut self) {
-        unsafe {
-            let mut sqe: io_uring_sqe = mem::zeroed();
-            io_uring_prep_nop(&mut sqe);
-            // self.ptr.borrow_mut().state = OpState::Unscheduled(sqe);
-        }
-    }
-
-    pub fn prepare_close(&mut self, fd: i32) {
-        unsafe {
-            let mut sqe: io_uring_sqe = mem::zeroed();
-            io_uring_prep_close(&mut sqe, fd);
-            // self.ptr.borrow_mut().state = OpState::Unscheduled(sqe);
-        }
-    }
-
-    pub fn prepare_openat2(&mut self, path: &OsStr, flags: i32, mode: u32) {
-        let mut op = self.ptr.borrow_mut();
-        op.parameters.path = CString::new(path.as_bytes()).expect("Null character in filename");
-
-        unsafe {
-            let mut sqe: io_uring_sqe = mem::zeroed();
-            io_uring_prep_openat(&mut sqe, libc::AT_FDCWD, op.parameters.path.as_ptr(), flags, mode);
-            // self.ptr.borrow_mut().state = OpState::Unscheduled(sqe);
-        }
-    }
-
-    pub fn prepare_socket(&mut self, domain: i32, socket_type: i32, protocol: i32) {
-        unsafe {
-            let mut sqe: io_uring_sqe = mem::zeroed();
-            io_uring_prep_socket(&mut sqe, domain, socket_type, protocol, 0);
-            // self.ptr.borrow_mut().state = OpState::Unscheduled(sqe);
-        }
-    }
-
-    pub fn prepare_read(&mut self, fd: i32, buffer: Vec<u8>, offset: Option<u64>) {
-        let mut op = self.ptr.borrow_mut();
-        op.parameters.buffer = buffer;
-
-        unsafe {
-            let mut sqe: io_uring_sqe = mem::zeroed();
-            io_uring_prep_read(&mut sqe, fd, op.parameters.buffer.as_mut_ptr() as *mut libc::c_void, op.parameters.buffer.len() as u32, offset.unwrap_or(u64::MAX));
-            // self.ptr.borrow_mut().state = OpState::Unscheduled(sqe);
-        }
-    }
-
-    pub fn prepare_write(&mut self, fd: i32, buffer: Vec<u8>, offset: Option<u64>) {
-        let mut op = self.ptr.borrow_mut();
-        op.parameters.buffer = buffer;
-
-        unsafe {
-            let mut sqe: io_uring_sqe = mem::zeroed();
-            io_uring_prep_write(&mut sqe, fd, op.parameters.buffer.as_ptr() as *const libc::c_void, op.parameters.buffer.len() as u32, offset.unwrap_or(u64::MAX));
-            // self.ptr.borrow_mut().state = OpState::Unscheduled(sqe);
-        }
-    }
-
     fn opcode(&self) -> u8 {
         unimplemented!()
         // let mut op = self.ptr.borrow_mut();
@@ -153,14 +89,6 @@ impl ReactorOpPtr {
         //         // opcode is u8 field at offset zero
         //         return unsafe { *(sqe as *const io_uring_sqe as *const u8) };
         //     }
-        // }
-    }
-
-    pub fn scheduled(&self) -> bool {
-        unimplemented!()
-        // match self.ptr.borrow().state {
-        //     OpState::InProgress() => true,
-        //     _ => false,
         // }
     }
 
@@ -216,7 +144,7 @@ impl Reactor {
 
     pub fn schedule_linked2(&mut self, ops: &mut [IOUringReq]) {
         let ops_count = ops.len() as u32;
-dbg!(ops_count);
+
         if self.ring.sq_space_left() < ops_count {
             self.submit();
         }
@@ -245,7 +173,6 @@ dbg!(ops_count);
                         io_uring_prep_close(sqe.ptr, *fd);
                     },
                     IOUringOp::Open(path, flags, mode) => {
-                        rop.result_is_fd = true;
                         rop.parameters.path = CString::new(path.as_bytes()).expect("Null character in filename");
 
                         io_uring_prep_openat(sqe.ptr, libc::AT_FDCWD, rop.parameters.path.as_ptr(), *flags, *mode);
