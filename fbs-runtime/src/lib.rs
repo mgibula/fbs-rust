@@ -107,9 +107,9 @@ impl<T: AsyncOpResult> Future for AsyncOp<T> {
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         match &self.0.op {
             IOUringOp::InProgress(rop) => {
-                match rop.completed() {
-                    true => Poll::Ready(self.1.take().unwrap()),
-                    false => Poll::Pending,
+                match rop.result_code() {
+                    Some(_) => Poll::Ready(self.1.take().unwrap()),
+                    None => Poll::Pending,
                 }
             },
             _ => {
@@ -272,8 +272,9 @@ mod tests {
             let r1 = ops.add(async_read(12, vec![]));
             let r2 = ops.add(async_close(12));
 
-            ops.await;
+            let succeeded = ops.await;
 
+            assert_eq!(succeeded, false);
             assert_eq!(r1.value(), Err((libc::EBADF, vec![])));
             assert_eq!(r2.value(), Err(libc::ECANCELED));
 

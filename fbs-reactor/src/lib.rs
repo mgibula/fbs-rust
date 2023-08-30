@@ -1,8 +1,6 @@
 use std::cell::RefCell;
-use std::ffi::{CString, OsStr};
+use std::ffi::CString;
 use std::rc::Rc;
-use std::mem::{self};
-use std::os::unix::prelude::OsStrExt;
 
 use liburing_sys::*;
 use io_uring::*;
@@ -63,7 +61,7 @@ impl ReactorOpParameters {
 enum OpState {
     Unscheduled(),
     Scheduled(OpCompletion),
-    Completed(),
+    Completed(i32),
 }
 
 struct ReactorOp {
@@ -90,16 +88,15 @@ impl ReactorOpPtr {
         ReactorOpPtr { ptr: Rc::new(RefCell::new(ReactorOp::new())) }
     }
 
-    pub fn completed(&self) -> bool {
-        if let OpState::Completed() = self.ptr.borrow().state {
-            return true;
+    pub fn result_code(&self) -> Option<i32> {
+        match self.ptr.borrow().state {
+            OpState::Completed(result) => Some(result),
+            _ => None,
         }
-
-        false
     }
 
     fn complete_op(&mut self, cqe: IoUringCQE, params: ReactorOpParameters) {
-        let completion = std::mem::replace(&mut self.ptr.borrow_mut().state, OpState::Completed());
+        let completion = std::mem::replace(&mut self.ptr.borrow_mut().state, OpState::Completed(cqe.result));
         if let OpState::Scheduled(Some(completion)) = completion {
             completion(cqe, params);
         }

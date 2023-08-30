@@ -56,20 +56,20 @@ impl AsyncLinkedOps {
 }
 
 impl Future for AsyncLinkedOps {
-    type Output = ();
+    type Output = bool;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         // return immediately if there are no ops
         let last_op = match self.ops.last_mut() {
-            None => return Poll::Ready(()),
+            None => return Poll::Ready(true),
             Some(op) => op,
         };
 
         match &last_op.op {
             IOUringOp::InProgress(rop) => {
-                match rop.completed() {
-                    true => { return Poll::Ready(()) },
-                    false => { return Poll::Pending },
+                match rop.result_code() {
+                    Some(result) => { return Poll::Ready(result >= 0) },
+                    None    => { return Poll::Pending },
                 }
             },
             _ => { /* handled below */ }
