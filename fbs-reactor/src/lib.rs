@@ -19,21 +19,22 @@ pub enum ReactorError {
     NoSQEAvailable,
 }
 
-pub type OpCompletion = Option<Box<dyn Fn(IoUringCQE, ReactorOpParameters)>>; 
+pub type OpCompletion = Option<Box<dyn Fn(IoUringCQE, ReactorOpParameters)>>;
 
-pub struct IOUringReq<'op> {
+pub struct IOUringReq {
     pub completion: OpCompletion,
-    pub op: IOUringOp<'op>,
+    pub op: IOUringOp,
 }
 
-pub enum IOUringOp<'op> {
+pub enum IOUringOp {
     InProgress(ReactorOpPtr),
 
     Nop(),
     Close(i32),                         // fd
-    Open(&'op OsStr, i32, u32),         // path, flags, mode
+    Open(CString, i32, u32),            // path, flags, mode
     Read(i32, Vec<u8>, Option<u64>),    // fd, buffer, offset
     Write(i32, Vec<u8>, Option<u64>),   // fd, buffer, offset
+    Socket(i32, i32, i32),
 }
 
 #[derive(Default)]
@@ -141,32 +142,6 @@ impl ReactorOpPtr {
         }
     }
 
-    pub fn fetch_completion(&self) -> Option<Box<dyn Fn(&mut IoUringCQE, &mut ReactorOpParameters)>> {
-        unimplemented!()
-        // self.ptr.borrow_mut().completion.take()
-    }
-
-    pub fn set_completion(&self, callback: impl Fn(&mut IoUringCQE, &mut ReactorOpParameters) + 'static) {
-        unimplemented!()
-        // self.ptr.borrow_mut().completion = Some(Box::new(callback));
-    }
-
-    fn schedule(&self, mut target_sqe: IoUringSQEPtr, index: usize, flags: u32) {
-        // let mut op = self.ptr.borrow_mut();
-        // match op.state {
-        //     OpState::Unscheduled(sqe) => {
-        //         target_sqe.copy_from(&sqe);
-        //         target_sqe.set_data64(index as u64);
-        //         target_sqe.set_flags(flags);
-        //     },
-        //     _ => {
-        //         panic!("Trying to schedule op in incorrect state");
-        //     }
-        // }
-
-        // op.state = OpState::InProgress();
-    }
-
     fn opcode(&self) -> u8 {
         unimplemented!()
         // let mut op = self.ptr.borrow_mut();
@@ -190,11 +165,11 @@ impl ReactorOpPtr {
     }
 
     pub fn completed(&self) -> bool {
-        unimplemented!()
-        // match self.ptr.borrow().state {
-        //     OpState::Completed(_) => true,
-        //     _ => false,
-        // }
+        if let OpState::Completed() = self.ptr.borrow().state {
+            return true;
+        }
+
+        false
     }
 
     fn complete_op(&mut self, cqe: IoUringCQE, params: ReactorOpParameters) {
@@ -241,7 +216,7 @@ impl Reactor {
 
     pub fn schedule_linked2(&mut self, ops: &mut [IOUringReq]) {
         let ops_count = ops.len() as u32;
-
+dbg!(ops_count);
         if self.ring.sq_space_left() < ops_count {
             self.submit();
         }
@@ -252,6 +227,7 @@ impl Reactor {
 
         self.in_flight += ops_count;
         self.uncommited += ops_count;
+
 
         ops.into_iter().enumerate().for_each(|(op_index, req)| {
             let rop = ReactorOpPtr::new();
@@ -284,6 +260,9 @@ impl Reactor {
 
                         io_uring_prep_write(sqe.ptr, *fd, rop.parameters.buffer.as_ptr() as *mut libc::c_void, rop.parameters.buffer.len() as u32, offset.unwrap_or(u64::MAX));
                     },
+                    IOUringOp::Socket(domain, socket_type, protocol) => {
+                        io_uring_prep_socket(sqe.ptr, *domain, *socket_type, *protocol, 0);
+                    },
                     IOUringOp::InProgress(_) => panic!("op already scheduled"),
                 }
 
@@ -302,40 +281,6 @@ impl Reactor {
             req.op = IOUringOp::InProgress(rop);
         });
 
-    }
-
-    pub fn schedule_linked(&mut self, ops: &[ReactorOpPtr]) -> Result<(), ReactorError> {
-        let ops_count = ops.len() as u32;
-
-        if self.ring.sq_space_left() < ops_count {
-            self.submit();
-        }
-
-        if self.ring.sq_space_left() < ops_count {
-            panic!("Not enough SQE entries after ring has been flushed");
-        }
-
-        ops.into_iter().enumerate().for_each(|(op_index, op)| {
-            let sqe = self.get_sqe().expect("Can't get SQE from io_uring");
-            let index = self.get_next_index();
-
-            let mut flags = 0;
-            if op_index as u32 == ops_count - 1 {
-                flags |= IOSQE_IO_LINK;
-            }
-
-            op.schedule(sqe, index, flags);
-            self.ops[index] = Some(op.clone());
-        });
-
-        self.in_flight += ops_count;
-        self.uncommited += ops_count;
-
-        Ok(())
-    }
-
-    pub fn schedule(&mut self, op: &ReactorOpPtr) -> Result<(), ReactorError> {
-        self.schedule_linked(slice::from_ref(op))
     }
 
     pub fn pending_ops(&self) -> u32 {

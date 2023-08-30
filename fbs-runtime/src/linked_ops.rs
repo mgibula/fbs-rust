@@ -1,22 +1,24 @@
 use super::ReactorOpPtr;
-use super::IOUringOp;
 use super::AsyncOpResult;
 use super::AsyncOp;
+use super::IOUringReq;
+use super::IOUringOp;
 
 use std::task::{Context, Poll};
 use std::pin::Pin;
 use std::future::Future;
 use std::cell::RefCell;
+use std::cell::Cell;
 use std::rc::Rc;
 
 use super::REACTOR;
 
-pub struct AsyncLinkedOps<'ops> {
-    ops: Vec<IOUringOp<'ops>>,
+pub struct AsyncLinkedOps {
+    ops: Vec<IOUringReq>,
 }
 
 pub struct DelayedResult<T> {
-    value: Rc<RefCell<Option<T>>>,
+    value: Rc<Cell<Option<T>>>,
 }
 
 impl<T> Clone for DelayedResult<T> {
@@ -26,16 +28,14 @@ impl<T> Clone for DelayedResult<T> {
 }
 
 impl<T> DelayedResult<T> {
-    pub fn new() -> Self {
-        DelayedResult { value: Rc::new(RefCell::new(None)) }
+    pub fn new(ptr: Rc<Cell<Option<T>>>) -> Self {
+        Self {
+            value: ptr
+        }
     }
 
-    pub fn is_completed(&self) -> bool {
-        self.value.borrow().is_some()
-    }
-
-    pub fn set_value(&self, value: T) {
-        *self.value.borrow_mut()  = Some(value);
+    pub fn value(self) -> T {
+        self.value.replace(None).unwrap()
     }
 }
 
@@ -44,16 +44,15 @@ impl AsyncLinkedOps {
         AsyncLinkedOps { ops: vec![] }
     }
 
-    pub fn add<T: AsyncOpResult + 'static>(&mut self, op: AsyncOp<T>) -> DelayedResult<T::Output> {
-        let result = DelayedResult::new();
-        let result2 = result.clone();
+    pub fn add<T: AsyncOpResult>(&mut self, mut op: AsyncOp<T>) -> DelayedResult<T::Output> {
+        let result_ptr = op.1;
+        let result = DelayedResult::new(result_ptr.clone());
 
-        // let op = op.0.clone();
-        // // op.set_completion(move |cqe, params| {
-        // //     result2.set_value(T::get_result(cqe, params));
-        // // });
+        op.0.completion = Some(Box::new(move |cqe, params| {
+            result_ptr.set(Some(T::get_result(cqe, params)));
+        }));
 
-        // self.ops.push(op);
+        self.ops.push(op.0);
         result
     }
 }
@@ -61,29 +60,37 @@ impl AsyncLinkedOps {
 impl Future for AsyncLinkedOps {
     type Output = ();
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let last_op = match self.ops.last() {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        // return immediately if there are no ops
+        let mut last_op = match self.ops.last_mut() {
             None => return Poll::Ready(()),
             Some(op) => op,
         };
 
-        let result = match (last_op.scheduled(), last_op.completed()) {
-            (false, _) => {
-                let waker = cx.waker().clone();
-                last_op.set_completion(move |_cqe, _params| {
-                    waker.wake_by_ref();
-                });
-
-                REACTOR.with(|r| {
-                    r.borrow_mut().schedule_linked(&self.ops)
-                }).expect("Error while scheduling multiple ops");
-
-                Poll::Pending
+        match &last_op.op {
+            IOUringOp::InProgress(rop) => {
+                match rop.completed() {
+                    true => { return Poll::Ready(()) },
+                    false => { return Poll::Pending },
+                }
             },
-            (true, false) => Poll::Pending,
-            (true, true) => Poll::Ready(())
-        };
+            _ => { }
+        }
 
-        result
+        let prev_cb = last_op.completion.take();
+        let waker = cx.waker().clone();
+        last_op.completion = Some(Box::new(move |cqe, params| {
+            if let Some(cb) = &prev_cb {
+                cb(cqe, params);
+            }
+
+            waker.wake_by_ref();
+        }));
+
+        REACTOR.with(|r| {
+            r.borrow_mut().schedule_linked2(&mut self.ops)
+        });
+
+        Poll::Pending
     }
 }

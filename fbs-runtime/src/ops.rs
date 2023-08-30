@@ -1,8 +1,9 @@
-use std::marker::PhantomData;
+use std::os::unix::prelude::OsStrExt;
 use std::path::Path;
+use std::ffi::CString;
 
 use super::AsyncOp;
-use super::ReactorOpPtr;
+use super::IOUringOp;
 use super::OpenMode;
 use super::SocketDomain;
 use super::SocketType;
@@ -48,43 +49,26 @@ impl AsyncOpResult for ResultBuffer {
 }
 
 pub fn async_nop() -> AsyncOp::<ResultErrno> {
-    let mut op = ReactorOpPtr::new();
-    op.prepare_nop();
-
-    AsyncOp(op, PhantomData)
+    AsyncOp::new(IOUringOp::Nop())
 }
 
 pub fn async_close(fd: i32) -> AsyncOp::<ResultErrno> {
-    let mut op = ReactorOpPtr::new();
-    op.prepare_close(fd);
-
-    AsyncOp(op, PhantomData)
+    AsyncOp::new(IOUringOp::Close(fd))
 }
 
 pub fn async_open<P: AsRef<Path>>(path: P, options: &OpenMode) -> AsyncOp::<ResultErrno> {
-    let mut op = ReactorOpPtr::new();
-    op.prepare_openat2(path.as_ref().as_os_str(), options.flags(), options.mode());
-
-    AsyncOp(op, PhantomData)
+    let path = CString::new(path.as_ref().as_os_str().as_bytes()).expect("Null character in filename");
+    AsyncOp::new(IOUringOp::Open(path, options.flags(), options.mode()))
 }
 
-pub fn async_socket(domain: SocketDomain, socket_type: SocketType, options: SocketOptions) -> AsyncOp::<ResultErrno> {
-    let mut op = ReactorOpPtr::new();
-    op.prepare_socket(domain as i32, socket_type as i32 | options.flags(), 0);
-
-    AsyncOp(op, PhantomData)
+pub fn async_socket<'op>(domain: SocketDomain, socket_type: SocketType, options: SocketOptions) -> AsyncOp::<ResultErrno> {
+    AsyncOp::new(IOUringOp::Socket(domain as i32, socket_type as i32, options.flags()))
 }
 
-pub fn async_read(fd: i32, buffer: Vec<u8>) -> AsyncOp::<ResultBuffer> {
-    let mut op = ReactorOpPtr::new();
-    op.prepare_read(fd, buffer, None);
-
-    AsyncOp(op, PhantomData)
+pub fn async_read<'op>(fd: i32, buffer: Vec<u8>) -> AsyncOp::<ResultBuffer> {
+    AsyncOp::new(IOUringOp::Read(fd, buffer, None))
 }
 
-pub fn async_write(fd: i32, buffer: Vec<u8>) -> AsyncOp::<ResultBuffer> {
-    let mut op = ReactorOpPtr::new();
-    op.prepare_write(fd, buffer, None);
-
-    AsyncOp(op, PhantomData)
+pub fn async_write<'op>(fd: i32, buffer: Vec<u8>) -> AsyncOp::<ResultBuffer> {
+    AsyncOp::new(IOUringOp::Write(fd, buffer, None))
 }

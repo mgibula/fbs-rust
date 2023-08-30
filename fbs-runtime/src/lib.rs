@@ -3,6 +3,7 @@ use std::cell::RefCell;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::cell::Cell;
+use std::slice;
 use std::task::{Context, Poll};
 use std::marker::PhantomData;
 use thiserror::Error;
@@ -47,9 +48,10 @@ pub fn async_yield() -> Yield {
 }
 
 pub fn async_op_supported<T: AsyncOpResult>(op: &AsyncOp<T>) -> bool {
-    REACTOR.with(|r| {
-        r.borrow().is_supported(&op.0)
-    })
+    unimplemented!()
+    // REACTOR.with(|r| {
+    //     r.borrow().is_supported(&op.0)
+    // })
 }
 
 pub fn async_run<T: 'static>(future: impl Future<Output = T> + 'static) -> T {
@@ -82,39 +84,21 @@ fn local_reactor_process_ops() -> bool {
 }
 
 pub trait AsyncOpResult : Unpin {
-    type Output;
+    type Output: 'static;
 
     fn get_result(cqe: IoUringCQE, params: ReactorOpParameters) -> Self::Output;
 }
 
-pub struct AsyncOp<T: AsyncOpResult> (ReactorOpPtr, PhantomData<T>);
+pub struct AsyncOp<T: AsyncOpResult> (IOUringReq, Rc<Cell<Option<T::Output>>>, PhantomData<T>);
 
-pub struct AsyncOp2<'op, T: AsyncOpResult> (IOUringReq<'op>, Rc<Cell<T::Output>>, PhantomData<T>);
+impl<T: AsyncOpResult> AsyncOp<T> {
+    fn new(op: IOUringOp) -> Self {
+        let req = IOUringReq {
+            completion: None,
+            op,
+        };
 
-impl<'op, T: AsyncOpResult> Future for AsyncOp2<'op, T> {
-    type Output = T::Output;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        match self.0.op {
-            IOUringOp::InProgress(rop) => {
-                unimplemented!()
-            },
-            _ => {
-                let waker = cx.waker().clone();
-                let result = self.1.clone();
-
-                self.0.completion = Some(Box::new(move |cqe, params| {
-                    result.set(T::get_result(cqe, params));
-                    waker.clone();                    
-                }));
-
-                REACTOR.with(|r| {
-                    r.borrow_mut().schedule_linked2(std::slice::from_mut(&mut self.0))
-                });
-
-                Poll::Pending
-            },
-        }
+        Self(req, Rc::new(Cell::new(None)), PhantomData)
     }
 }
 
@@ -122,27 +106,29 @@ impl<T: AsyncOpResult> Future for AsyncOp<T> {
     type Output = T::Output;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let result = match (self.0.scheduled(), self.0.completed()) {
-            (true, true) => Poll::Ready(T::get_result(self.0.get_cqe(), self.0.fetch_parameters())),
-            (true, false) => Poll::Pending,
-            (false, _) => {
+        match &self.0.op {
+            IOUringOp::InProgress(rop) => {
+                match rop.completed() {
+                    true => Poll::Ready(self.1.take().take().unwrap()),
+                    false => Poll::Pending,
+                }
+            },
+            _ => {
                 let waker = cx.waker().clone();
-                let old_completion = self.0.fetch_completion();
+                let result = self.1.clone();
 
-                self.0.set_completion(move |cqe, params| {
-                    old_completion(cqe, params);
+                self.0.completion = Some(Box::new(move |cqe, params| {
+                    result.set(Some(T::get_result(cqe, params)));
                     waker.wake_by_ref();
-                });
+                }));
 
                 REACTOR.with(|r| {
-                    r.borrow_mut().schedule(&self.0)
-                }).expect("Error while scheduling op");
+                    r.borrow_mut().schedule_linked2(slice::from_mut(&mut self.0))
+                });
 
                 Poll::Pending
-            }
-        };
-
-        result
+            },
+        }
     }
 }
 
@@ -280,6 +266,7 @@ mod tests {
         assert_eq!(result, 1);
     }
 
+    #[test]
     fn local_linked_ops_test() {
         let result = async_run(async {
             let mut ops = AsyncLinkedOps::new();
@@ -287,6 +274,16 @@ mod tests {
             let r2 = ops.add(async_close(12));
 
             ops.await;
+
+            match r1.value() {
+                Ok(_) => println!("r1 value ok"),
+                Err(code) => println!("r1 value err {}", code.0),
+            }
+
+            match r2.value() {
+                Ok(_) => println!("r2 value ok"),
+                Err(code) => println!("r2 value err: {}", code),
+            }
 
             1
         });
