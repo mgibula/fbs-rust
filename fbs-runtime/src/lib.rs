@@ -99,6 +99,16 @@ impl<T: AsyncOpResult> AsyncOp<T> {
 
         Self(req, Rc::new(Cell::new(None)), PhantomData)
     }
+
+    pub fn schedule(mut self, handler: impl Fn(T::Output) + 'static) {
+        self.0.completion = Some(Box::new(move |cqe, params| {
+            handler(T::get_result(cqe, params));
+        }));
+
+        REACTOR.with(|r| {
+            r.borrow_mut().schedule_linked2(slice::from_mut(&mut self.0))
+        });
+    }
 }
 
 impl<T: AsyncOpResult> Future for AsyncOp<T> {
@@ -299,6 +309,32 @@ mod tests {
 
             1
         });
+
+        // ensure it actually executed
+        assert_eq!(result, 1);
+    }
+
+    #[test]
+    fn local_schedule_close() {
+        let called = Rc::new(Cell::new(false));
+        let called_orig = called.clone();
+
+        let result = async_run(async move {
+            let mut options = OpenMode::new();
+            options.create(true, 0o777);
+
+            let result = async_open("/tmp/testowy-uring.txt", &options).await;
+            assert!(result.is_ok());
+
+            let called = called.clone();
+            async_close(result.unwrap()).schedule(move |_| {
+                called.set(true);
+            });
+
+            1
+        });
+
+        assert_eq!(called_orig.get(), true);
 
         // ensure it actually executed
         assert_eq!(result, 1);
