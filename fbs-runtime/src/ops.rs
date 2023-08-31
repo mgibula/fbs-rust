@@ -84,7 +84,7 @@ pub fn async_open<P: AsRef<Path>>(path: P, options: &OpenMode) -> AsyncOp::<Resu
 }
 
 pub fn async_socket(domain: SocketDomain, socket_type: SocketType, options: SocketOptions) -> AsyncOp::<ResultErrno> {
-    AsyncOp::new(IOUringOp::Socket(domain as i32, socket_type as i32, options.flags()))
+    AsyncOp::new(IOUringOp::Socket(domain as i32, socket_type as i32 | options.flags(), 0))
 }
 
 pub fn async_read(fd: i32, buffer: Vec<u8>) -> AsyncOp::<ResultBuffer> {
