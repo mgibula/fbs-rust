@@ -1,3 +1,5 @@
+use std::os::fd::{OwnedFd, FromRawFd, AsRawFd};
+use std::net::SocketAddr;
 
 #[repr(i32)]
 pub enum SocketDomain {
@@ -42,4 +44,25 @@ impl SocketOptions {
     pub fn flags(&self) -> i32 {
         self.flags
     }
+}
+
+pub struct Socket {
+    fd: OwnedFd,
+}
+
+impl Socket {
+    pub fn new(domain: SocketDomain, socket_type: SocketType, options: &SocketOptions) -> Self {
+        unsafe {
+            let sockfd = libc::socket(domain as libc::c_int, socket_type as libc::c_int | options.flags(), 0);
+
+            Self {
+                fd: OwnedFd::from_raw_fd(sockfd)
+            }
+        }
+    }
+
+}
+
+pub struct Listener {
+    sock: Socket,
 }

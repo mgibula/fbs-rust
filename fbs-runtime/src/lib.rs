@@ -209,10 +209,8 @@ mod tests {
     #[test]
     fn local_openat2_test() {
         let result = async_run(async {
-            let mut options = OpenMode::new();
-            options.create(true, 0o777);
 
-            let result = async_open("/tmp/testowy-uring.txt", &options).await;
+            let result = async_open("/tmp/testowy-uring.txt", OpenMode::new().create(true, 0o777)).await;
             assert!(result.is_ok());
             1
         });
