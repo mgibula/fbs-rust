@@ -42,6 +42,14 @@ impl IpAddress {
         }
     }
 
+    pub unsafe fn from_inet4(value: &libc::in_addr) -> IpAddress {
+        IpAddress::V4(*value)
+    }
+
+    pub unsafe fn from_inet6(value: &libc::in6_addr) -> IpAddress {
+        IpAddress::V6(*value)
+    }
+
     fn try_ipv4_from_text(value: &CStr) -> Option<IpAddress> {
         unsafe {
             let mut addr4  = MaybeUninit::<libc::in_addr>::zeroed().assume_init();
