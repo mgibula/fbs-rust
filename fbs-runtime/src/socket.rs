@@ -1,5 +1,5 @@
-use std::os::fd::{OwnedFd, FromRawFd, AsRawFd};
-use std::net::SocketAddr;
+use std::os::fd::{OwnedFd, FromRawFd};
+use thiserror::Error;
 
 #[repr(i32)]
 pub enum SocketDomain {
