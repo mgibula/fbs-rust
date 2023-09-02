@@ -1,7 +1,6 @@
 use super::ip_address::*;
 use thiserror::Error;
 use std::num::ParseIntError;
-use std::fmt::format;
 
 pub struct SocketIpAddress {
     address: IpAddress,
@@ -39,7 +38,11 @@ impl SocketIpAddress {
     }
 
     pub fn to_text(&self) -> String {
-        format!("{}:{}", self.address.to_text(), self.port)
+        if self.address.is_ipv4() {
+            format!("{}:{}", self.address.to_text(), self.port)
+        } else {
+            format!("[{}]:{}", self.address.to_text(), self.port)
+        }
     }
 
     #[inline(always)]
@@ -63,6 +66,7 @@ mod tests {
 
         assert_eq!(address.address().to_text(), "127.0.0.1");
         assert_eq!(address.port(), 2404);
+        assert_eq!(address.to_text(), "127.0.0.1:2404");
     }
 
     #[test]
@@ -71,5 +75,6 @@ mod tests {
 
         assert_eq!(address.address().to_text(), "2001:db8:3333:4444:5555:6666:7777:8888");
         assert_eq!(address.port(), 2404);
+        assert_eq!(address.to_text(), "[2001:db8:3333:4444:5555:6666:7777:8888]:2404");
     }
 }
