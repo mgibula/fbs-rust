@@ -1,6 +1,5 @@
 use std::ffi::NulError;
 use std::mem::MaybeUninit;
-use std::os::fd::{OwnedFd, FromRawFd};
 use thiserror::Error;
 use std::ffi::{CString, CStr};
 
@@ -20,6 +19,7 @@ pub enum IpAddressFormatError {
     AddressInvalid,
 }
 
+#[derive(Clone, Copy)]
 pub enum IpAddress {
     V4(libc::in_addr),
     V6(libc::in6_addr),

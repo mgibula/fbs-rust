@@ -16,6 +16,7 @@ mod open_mode;
 mod socket;
 mod linked_ops;
 pub mod ip_address;
+pub mod socket_address;
 
 pub use ops::*;
 pub use open_mode::*;
