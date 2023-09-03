@@ -66,35 +66,43 @@ impl AsyncOpResult for ResultBuffer {
     }
 }
 
-pub fn async_nop() -> AsyncOp::<ResultErrno> {
+pub type AsyncNop = AsyncOp::<ResultErrno>;
+pub type AsyncClose = AsyncOp::<ResultErrno>;
+pub type AsyncOpen = AsyncOp::<ResultDescriptor>;
+pub type AsyncSocket = AsyncOp::<ResultErrno>;
+pub type AsyncRead = AsyncOp::<ResultBuffer>;
+pub type AsyncWrite = AsyncOp::<ResultBuffer>;
+pub type AsyncAccept = AsyncOp::<ResultDescriptor>;
+
+pub fn async_nop() -> AsyncNop {
     AsyncOp::new(IOUringOp::Nop())
 }
 
-pub fn async_close_raw_fd(fd: i32) -> AsyncOp::<ResultErrno> {
+pub fn async_close_raw_fd(fd: i32) -> AsyncClose {
     AsyncOp::new(IOUringOp::Close(fd))
 }
 
-pub fn async_close(fd: OwnedFd) -> AsyncOp::<ResultErrno> {
+pub fn async_close(fd: OwnedFd) -> AsyncClose {
     AsyncOp::new(IOUringOp::Close(fd.into_raw_fd()))
 }
 
-pub fn async_open<P: AsRef<Path>>(path: P, options: &OpenMode) -> AsyncOp::<ResultDescriptor> {
+pub fn async_open<P: AsRef<Path>>(path: P, options: &OpenMode) -> AsyncOpen {
     let path = CString::new(path.as_ref().as_os_str().as_bytes()).expect("Null character in filename");
     AsyncOp::new(IOUringOp::Open(path, options.flags(), options.mode()))
 }
 
-pub fn async_socket(domain: SocketDomain, socket_type: SocketType, options: i32) -> AsyncOp::<ResultErrno> {
+pub fn async_socket(domain: SocketDomain, socket_type: SocketType, options: i32) -> AsyncSocket {
     AsyncOp::new(IOUringOp::Socket(domain as i32, socket_type as i32 | options, 0))
 }
 
-pub fn async_read(fd: i32, buffer: Vec<u8>) -> AsyncOp::<ResultBuffer> {
+pub fn async_read(fd: i32, buffer: Vec<u8>) -> AsyncRead {
     AsyncOp::new(IOUringOp::Read(fd, buffer, None))
 }
 
-pub fn async_write(fd: i32, buffer: Vec<u8>) -> AsyncOp::<ResultBuffer> {
+pub fn async_write(fd: i32, buffer: Vec<u8>) -> AsyncWrite {
     AsyncOp::new(IOUringOp::Write(fd, buffer, None))
 }
 
-pub fn async_connect(fd: i32, flags: i32) -> AsyncOp::<ResultDescriptor> {
+pub fn async_accept(fd: i32, flags: i32) -> AsyncAccept {
     AsyncOp::new(IOUringOp::Accept(fd, flags))
 }

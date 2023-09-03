@@ -1,6 +1,8 @@
 use std::mem::size_of;
 use std::os::fd::{OwnedFd, FromRawFd, AsRawFd, RawFd};
 use std::io::Error;
+
+use super::AsyncAccept;
 use super::socket_address::SocketIpAddress;
 use thiserror::Error;
 
@@ -106,6 +108,10 @@ impl Socket {
         }
 
         Ok(())
+    }
+
+    pub fn async_accept(&self) -> AsyncAccept {
+        super::async_accept(self.fd.as_raw_fd(), 0)
     }
 
 }
