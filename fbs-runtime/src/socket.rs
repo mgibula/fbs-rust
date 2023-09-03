@@ -12,13 +12,13 @@ pub enum SocketType {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct SocketOptions {
+pub struct SocketFlags {
     flags: i32,
 }
 
-impl SocketOptions {
+impl SocketFlags {
     pub fn new() -> Self {
-        SocketOptions { flags: 0 }
+        SocketFlags { flags: 0 }
     }
 
     pub fn close_on_exec(&mut self, value: bool) -> &mut Self {
@@ -46,14 +46,18 @@ impl SocketOptions {
     }
 }
 
+pub enum SocketOptions {
+    ReuseAddr(bool),
+}
+
 pub struct Socket {
     fd: OwnedFd,
 }
 
 impl Socket {
-    pub fn new(domain: SocketDomain, socket_type: SocketType, options: &SocketOptions) -> Self {
+    pub fn new(domain: SocketDomain, socket_type: SocketType, options: i32) -> Self {
         unsafe {
-            let sockfd = libc::socket(domain as libc::c_int, socket_type as libc::c_int | options.flags(), 0);
+            let sockfd = libc::socket(domain as libc::c_int, socket_type as libc::c_int | options, 0);
 
             Self {
                 fd: OwnedFd::from_raw_fd(sockfd)

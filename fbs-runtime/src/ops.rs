@@ -8,7 +8,7 @@ use super::IOUringOp;
 use super::OpenMode;
 use super::SocketDomain;
 use super::SocketType;
-use super::SocketOptions;
+use super::SocketFlags;
 use super::AsyncOpResult;
 use super::IoUringCQE;
 use super::ReactorOpParameters;
@@ -83,8 +83,8 @@ pub fn async_open<P: AsRef<Path>>(path: P, options: &OpenMode) -> AsyncOp::<Resu
     AsyncOp::new(IOUringOp::Open(path, options.flags(), options.mode()))
 }
 
-pub fn async_socket(domain: SocketDomain, socket_type: SocketType, options: SocketOptions) -> AsyncOp::<ResultErrno> {
-    AsyncOp::new(IOUringOp::Socket(domain as i32, socket_type as i32 | options.flags(), 0))
+pub fn async_socket(domain: SocketDomain, socket_type: SocketType, options: i32) -> AsyncOp::<ResultErrno> {
+    AsyncOp::new(IOUringOp::Socket(domain as i32, socket_type as i32 | options, 0))
 }
 
 pub fn async_read(fd: i32, buffer: Vec<u8>) -> AsyncOp::<ResultBuffer> {
