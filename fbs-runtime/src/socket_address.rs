@@ -30,8 +30,8 @@ impl SocketAddressBinary {
     pub fn length(&self) -> usize {
         unsafe {
             match self.generic.sa_family as i32 {
-                libc::AF_INET => size_of::<libc::in_addr>(),
-                libc::AF_INET6 => size_of::<libc::in6_addr>(),
+                libc::AF_INET => size_of::<libc::sockaddr_in>(),
+                libc::AF_INET6 => size_of::<libc::sockaddr_in6>(),
                 _ => 0
             }
         }
