@@ -14,7 +14,7 @@ impl<T> TaskData<T> {
     pub fn new(future: Pin<Box<dyn Future<Output = T>>>, channel: ChannelTx<ExecutorCmd>) -> Self {
         TaskData {
             future,
-            channel ,
+            channel,
             own_ptr: Weak::new(),
             wait_index: None,
             result: None,
