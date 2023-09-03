@@ -94,3 +94,7 @@ pub fn async_read(fd: i32, buffer: Vec<u8>) -> AsyncOp::<ResultBuffer> {
 pub fn async_write(fd: i32, buffer: Vec<u8>) -> AsyncOp::<ResultBuffer> {
     AsyncOp::new(IOUringOp::Write(fd, buffer, None))
 }
+
+pub fn async_connect(fd: i32, flags: i32) -> AsyncOp::<ResultDescriptor> {
+    AsyncOp::new(IOUringOp::Accept(fd, flags))
+}

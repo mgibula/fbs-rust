@@ -33,6 +33,7 @@ impl IOUringOpType {
     pub const READ: u32 = io_uring_op_IORING_OP_READ;
     pub const WRITE: u32 = io_uring_op_IORING_OP_WRITE;
     pub const SOCKET: u32 = io_uring_op_IORING_OP_SOCKET;
+    pub const ACCEPT: u32 = io_uring_op_IORING_OP_ACCEPT;
 }
 
 pub enum IOUringOp {
@@ -44,6 +45,7 @@ pub enum IOUringOp {
     Read(i32, Vec<u8>, Option<u64>),    // fd, buffer, offset
     Write(i32, Vec<u8>, Option<u64>),   // fd, buffer, offset
     Socket(i32, i32, i32),
+    Accept(i32, i32),
 }
 
 #[derive(Default)]
@@ -185,6 +187,9 @@ impl Reactor {
                     },
                     IOUringOp::Socket(domain, socket_type, protocol) => {
                         io_uring_prep_socket(sqe.ptr, domain, socket_type, protocol, 0);
+                    },
+                    IOUringOp::Accept(fd, flags) => {
+                        io_uring_prep_accept(sqe.ptr, fd, std::ptr::null_mut(), std::ptr::null_mut(), flags);
                     },
                     IOUringOp::InProgress(_) => panic!("op already scheduled"),
                 }
