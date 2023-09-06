@@ -2,6 +2,7 @@
 resolver = "2"
 
 members = [
+    "fbs-library",
     "fbs-runtime",
     "fbs-reactor",
     "liburing-sys",

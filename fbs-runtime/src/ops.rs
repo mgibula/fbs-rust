@@ -11,7 +11,8 @@ use super::SocketType;
 use super::AsyncOpResult;
 use super::IoUringCQE;
 use super::ReactorOpParameters;
-use super::socket::Socket;
+
+use fbs_library::socket::Socket;
 
 pub struct ResultErrno {
 }
@@ -116,6 +117,6 @@ pub fn async_write<T: AsRawFd>(fd: &T, buffer: Vec<u8>) -> AsyncWrite {
     AsyncOp::new(IOUringOp::Write(fd.as_raw_fd(), buffer, None))
 }
 
-pub fn async_accept<T: AsRawFd>(fd: T, flags: i32) -> AsyncAccept {
+pub fn async_accept<T: AsRawFd>(fd: &T, flags: i32) -> AsyncAccept {
     AsyncOp::new(IOUringOp::Accept(fd.as_raw_fd(), flags))
 }

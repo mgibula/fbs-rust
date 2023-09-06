@@ -8,19 +8,15 @@ use std::task::{Context, Poll};
 use std::marker::PhantomData;
 use thiserror::Error;
 
+use fbs_library::open_mode::OpenMode;
+use fbs_library::socket::*;
 use fbs_executor::*;
 use fbs_reactor::*;
 
 mod ops;
-mod open_mode;
-mod socket;
 mod linked_ops;
-pub mod ip_address;
-pub mod socket_address;
 
 pub use ops::*;
-pub use open_mode::*;
-pub use socket::*;
 pub use linked_ops::*;
 
 #[derive(Error, Debug)]

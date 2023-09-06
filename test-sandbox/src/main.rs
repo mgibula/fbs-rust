@@ -1,6 +1,6 @@
 use fbs_runtime::*;
-use fbs_runtime::socket_address::*;
-use fbs_runtime::Socket;
+use fbs_library::socket_address::*;
+use fbs_library::socket::*;
 
 async fn handle_client(fd: Socket)
 {
@@ -41,7 +41,7 @@ fn main() {
         socket.set_option(SocketOptions::ReuseAddr(true)).unwrap();
         socket.listen(&server_address, 100).unwrap();
         loop {
-            let client = socket.async_accept().await;
+            let client = async_accept(&socket, 0).await;
             match client {
                 Ok(fd) => {
                     println!("Client accepted!");

@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+fbs-library = { path = "../fbs-library" }
 fbs-executor = { path = "../fbs-executor" }
 fbs-reactor = { path = "../fbs-reactor" }
 thiserror = "1.0.40"

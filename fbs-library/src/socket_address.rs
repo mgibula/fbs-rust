@@ -1,7 +1,9 @@
-use super::ip_address::*;
-use thiserror::Error;
 use std::num::ParseIntError;
 use std::mem::{MaybeUninit, size_of};
+
+use super::ip_address::*;
+
+use thiserror::Error;
 
 pub struct SocketIpAddress {
     address: IpAddress,
