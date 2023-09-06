@@ -159,6 +159,8 @@ fn async_run_all() {
 
 #[cfg(test)]
 mod tests {
+    use std::os::fd::{OwnedFd, FromRawFd, AsFd};
+
     use super::*;
 
     #[test]
@@ -243,7 +245,8 @@ mod tests {
     #[test]
     fn local_close_test() {
         let result = async_run(async {
-            let result = async_close_raw_fd(123).await;
+            let testfd = unsafe { OwnedFd::from_raw_fd(123) };
+            let result = async_close(testfd).await;
             assert!(result.is_err());
             1
         });
@@ -255,7 +258,8 @@ mod tests {
     #[test]
     fn local_close_test2() {
         let result = async_run(async {
-            let result = async_close_raw_fd(0).await;
+            let testfd = unsafe { OwnedFd::from_raw_fd(0) };
+            let result = async_close(testfd).await;
             assert!(result.is_ok());
             1
         });
@@ -282,7 +286,8 @@ mod tests {
     #[test]
     fn local_read_test() {
         let result = async_run(async {
-            let data = async_read(12, vec![]);
+            let testfd = unsafe { OwnedFd::from_raw_fd(12) };
+            let data = async_read(&testfd, vec![]);
             let data = data.await;
 
             assert!(data.is_err());
@@ -298,8 +303,10 @@ mod tests {
     fn local_linked_ops_test() {
         let result = async_run(async {
             let mut ops = AsyncLinkedOps::new();
-            let r1 = ops.add(async_read(12, vec![]));
-            let r2 = ops.add(async_close_raw_fd(12));
+            let testfd = unsafe { OwnedFd::from_raw_fd(12) };
+
+            let r1 = ops.add(async_read(&testfd, vec![]));
+            let r2 = ops.add(async_close(testfd));
 
             let succeeded = ops.await;
 

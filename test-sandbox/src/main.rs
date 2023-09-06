@@ -1,26 +1,33 @@
 use fbs_runtime::*;
 use fbs_runtime::socket_address::*;
-use std::os::fd::{OwnedFd, FromRawFd, AsRawFd};
+use fbs_runtime::Socket;
 
-async fn handle_client(fd: OwnedFd)
+async fn handle_client(fd: Socket)
 {
     println!("Inside handle client");
-    loop {
+    'accept : loop {
         let mut buffer = vec![];
-        buffer.resize(1024, 0);
-        let read_result = async_read(fd.as_raw_fd(), buffer).await;
+        buffer.resize(100, 0);
+
+        let read_result = async_read(&fd, buffer).await;
         match read_result {
             Ok(buffer) => {
                 println!("Got: {:?}", &buffer);
                 if buffer.is_empty() {
-                    return;
+                    break 'accept;
                 }
             },
-            Err((errno, buffer)) => {
+            Err((errno, _)) => {
                 print!("Error: {}", errno);
-                return;
+                break 'accept;
             },
         }
+    }
+
+    let result = async_close(fd).await;
+    match result {
+        Ok(status) => println!("async close returned: {}", status),
+        Err(err) => println!("async close errored: {}", err),
     }
 }
 

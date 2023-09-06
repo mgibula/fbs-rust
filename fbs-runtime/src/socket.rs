@@ -1,8 +1,8 @@
 use std::mem::size_of;
-use std::os::fd::{OwnedFd, FromRawFd, AsRawFd, RawFd};
+use std::os::fd::{OwnedFd, FromRawFd, AsRawFd, RawFd, AsFd, IntoRawFd};
 use std::io::Error;
 
-use super::AsyncAccept;
+use super::{AsyncAccept, AsyncRead, AsyncClose};
 use super::socket_address::SocketIpAddress;
 use thiserror::Error;
 
@@ -119,5 +119,17 @@ impl Socket {
 impl AsRawFd for Socket {
     fn as_raw_fd(&self) -> RawFd {
         self.fd.as_raw_fd()
+    }
+}
+
+impl IntoRawFd for Socket {
+    fn into_raw_fd(self) -> RawFd {
+        self.fd.into_raw_fd()
+    }
+}
+
+impl FromRawFd for Socket {
+    unsafe fn from_raw_fd(fd: RawFd) -> Self {
+        Self { fd: OwnedFd::from_raw_fd(fd) }
     }
 }

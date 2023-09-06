@@ -1,4 +1,4 @@
-use std::os::fd::{OwnedFd, FromRawFd, IntoRawFd};
+use std::os::fd::{OwnedFd, FromRawFd, IntoRawFd, AsRawFd};
 use std::os::unix::prelude::OsStrExt;
 use std::path::Path;
 use std::ffi::CString;
@@ -8,10 +8,10 @@ use super::IOUringOp;
 use super::OpenMode;
 use super::SocketDomain;
 use super::SocketType;
-use super::SocketFlags;
 use super::AsyncOpResult;
 use super::IoUringCQE;
 use super::ReactorOpParameters;
+use super::socket::Socket;
 
 pub struct ResultErrno {
 }
@@ -47,6 +47,23 @@ impl AsyncOpResult for ResultDescriptor {
     }
 }
 
+pub struct ResultSocket {
+}
+
+impl AsyncOpResult for ResultSocket {
+    type Output = Result<Socket, i32>;
+
+    fn get_result(cqe: IoUringCQE, _params: ReactorOpParameters) -> Self::Output {
+        let result: Result<Socket, i32> = if cqe.result >= 0 {
+            Ok(unsafe { Socket::from_raw_fd(cqe.result) } )
+        } else {
+            Err(-cqe.result)
+        };
+
+        result
+    }
+}
+
 pub struct ResultBuffer {
 }
 
@@ -72,17 +89,13 @@ pub type AsyncOpen = AsyncOp::<ResultDescriptor>;
 pub type AsyncSocket = AsyncOp::<ResultErrno>;
 pub type AsyncRead = AsyncOp::<ResultBuffer>;
 pub type AsyncWrite = AsyncOp::<ResultBuffer>;
-pub type AsyncAccept = AsyncOp::<ResultDescriptor>;
+pub type AsyncAccept = AsyncOp::<ResultSocket>;
 
 pub fn async_nop() -> AsyncNop {
     AsyncOp::new(IOUringOp::Nop())
 }
 
-pub fn async_close_raw_fd(fd: i32) -> AsyncClose {
-    AsyncOp::new(IOUringOp::Close(fd))
-}
-
-pub fn async_close(fd: OwnedFd) -> AsyncClose {
+pub fn async_close<T: IntoRawFd>(fd: T) -> AsyncClose {
     AsyncOp::new(IOUringOp::Close(fd.into_raw_fd()))
 }
 
@@ -95,14 +108,14 @@ pub fn async_socket(domain: SocketDomain, socket_type: SocketType, options: i32)
     AsyncOp::new(IOUringOp::Socket(domain as i32, socket_type as i32 | options, 0))
 }
 
-pub fn async_read(fd: i32, buffer: Vec<u8>) -> AsyncRead {
-    AsyncOp::new(IOUringOp::Read(fd, buffer, None))
+pub fn async_read<T: AsRawFd>(fd: &T, buffer: Vec<u8>) -> AsyncRead {
+    AsyncOp::new(IOUringOp::Read(fd.as_raw_fd(), buffer, None))
 }
 
-pub fn async_write(fd: i32, buffer: Vec<u8>) -> AsyncWrite {
-    AsyncOp::new(IOUringOp::Write(fd, buffer, None))
+pub fn async_write<T: AsRawFd>(fd: &T, buffer: Vec<u8>) -> AsyncWrite {
+    AsyncOp::new(IOUringOp::Write(fd.as_raw_fd(), buffer, None))
 }
 
-pub fn async_accept(fd: i32, flags: i32) -> AsyncAccept {
-    AsyncOp::new(IOUringOp::Accept(fd, flags))
+pub fn async_accept<T: AsRawFd>(fd: T, flags: i32) -> AsyncAccept {
+    AsyncOp::new(IOUringOp::Accept(fd.as_raw_fd(), flags))
 }
