@@ -2,6 +2,20 @@ use fbs_runtime::*;
 use fbs_library::socket_address::*;
 use fbs_library::socket::*;
 
+async fn try_connect()
+{
+    let sock = Socket::new(SocketDomain::Inet, SocketType::Stream, SocketFlags::new().close_on_exec(true).flags());
+    let destination = SocketIpAddress::from_text("99.83.207.202:80").unwrap();
+
+    let connect_result = async_connect(&sock, destination).await;
+    match connect_result {
+        Err(_) => println!("Error while connecting"),
+        Ok(_) => println!("connected"),
+    }
+
+    async_close(sock).await;
+}
+
 async fn handle_client(fd: Socket)
 {
     println!("Inside handle client");
@@ -16,6 +30,8 @@ async fn handle_client(fd: Socket)
                 if buffer.is_empty() {
                     break 'accept;
                 }
+
+                try_connect().await;
             },
             Err((errno, _)) => {
                 print!("Error: {}", errno);

@@ -5,5 +5,6 @@ edition = "2021"
 
 [dependencies]
 liburing-sys = { path = "../liburing-sys" }
+fbs-library = { path = "../fbs-library" }
 thiserror = "1.0.40"
 libc = "0.2.147"

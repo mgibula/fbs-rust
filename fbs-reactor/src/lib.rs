@@ -5,6 +5,7 @@ use std::rc::Rc;
 use liburing_sys::*;
 use io_uring::*;
 use thiserror::Error;
+use fbs_library::socket_address::{SocketIpAddress, SocketAddressBinary};
 
 pub use io_uring::IoUringCQE;
 
@@ -34,6 +35,7 @@ impl IOUringOpType {
     pub const WRITE: u32 = io_uring_op_IORING_OP_WRITE;
     pub const SOCKET: u32 = io_uring_op_IORING_OP_SOCKET;
     pub const ACCEPT: u32 = io_uring_op_IORING_OP_ACCEPT;
+    pub const CONNECT: u32 = io_uring_op_IORING_OP_CONNECT;
 }
 
 pub enum IOUringOp {
@@ -46,17 +48,19 @@ pub enum IOUringOp {
     Write(i32, Vec<u8>, Option<u64>),   // fd, buffer, offset
     Socket(i32, i32, i32),
     Accept(i32, i32),
+    Connect(i32, SocketIpAddress),
 }
 
 #[derive(Default)]
 pub struct ReactorOpParameters {
     path: CString,
+    address: SocketAddressBinary,
     pub buffer: Vec<u8>,
 }
 
 impl ReactorOpParameters {
     fn new() -> Self {
-        ReactorOpParameters { path: CString::default(), buffer: Vec::default() }
+        ReactorOpParameters { path: CString::default(), address: SocketAddressBinary::default(), buffer: Vec::default() }
     }
 }
 
@@ -190,6 +194,11 @@ impl Reactor {
                     },
                     IOUringOp::Accept(fd, flags) => {
                         io_uring_prep_accept(sqe.ptr, fd, std::ptr::null_mut(), std::ptr::null_mut(), flags);
+                    },
+                    IOUringOp::Connect(fd, address) => {
+                        rop.parameters.address = address.to_binary();
+
+                        io_uring_prep_connect(sqe.ptr, fd, rop.parameters.address.sockaddr_ptr(), rop.parameters.address.length() as u32);
                     },
                     IOUringOp::InProgress(_) => panic!("op already scheduled"),
                 }

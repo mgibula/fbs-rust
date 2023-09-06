@@ -13,6 +13,7 @@ use super::IoUringCQE;
 use super::ReactorOpParameters;
 
 use fbs_library::socket::Socket;
+use fbs_library::socket_address::SocketIpAddress;
 
 pub struct ResultErrno {
 }
@@ -91,6 +92,7 @@ pub type AsyncSocket = AsyncOp::<ResultErrno>;
 pub type AsyncRead = AsyncOp::<ResultBuffer>;
 pub type AsyncWrite = AsyncOp::<ResultBuffer>;
 pub type AsyncAccept = AsyncOp::<ResultSocket>;
+pub type AsyncConnect = AsyncOp::<ResultErrno>;
 
 pub fn async_nop() -> AsyncNop {
     AsyncOp::new(IOUringOp::Nop())
@@ -119,4 +121,8 @@ pub fn async_write<T: AsRawFd>(fd: &T, buffer: Vec<u8>) -> AsyncWrite {
 
 pub fn async_accept<T: AsRawFd>(fd: &T, flags: i32) -> AsyncAccept {
     AsyncOp::new(IOUringOp::Accept(fd.as_raw_fd(), flags))
+}
+
+pub fn async_connect<T: AsRawFd>(fd: &T, address: SocketIpAddress) -> AsyncConnect {
+    AsyncOp::new(IOUringOp::Connect(fd.as_raw_fd(), address))
 }

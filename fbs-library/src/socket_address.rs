@@ -17,6 +17,16 @@ pub union SocketAddressBinary {
     ipv6: libc::sockaddr_in6,
 }
 
+impl Default for SocketAddressBinary {
+    fn default() -> Self {
+        unsafe {
+            let mut result = MaybeUninit::<SocketAddressBinary>::zeroed().assume_init();
+            result.generic.sa_family = libc::AF_UNSPEC as u16;
+            result
+        }
+    }
+}
+
 impl SocketAddressBinary {
     pub fn to_ip_address(&self) -> Option<IpAddress> {
         unsafe {
