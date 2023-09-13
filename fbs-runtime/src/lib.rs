@@ -155,7 +155,7 @@ fn async_run_all() {
 
 #[cfg(test)]
 mod tests {
-    use std::os::fd::{OwnedFd, FromRawFd, AsFd};
+    use std::os::fd::{OwnedFd, FromRawFd};
 
     use super::*;
 
@@ -297,6 +297,8 @@ mod tests {
 
     #[test]
     fn local_linked_ops_test() {
+        use fbs_library::system_error::SystemError;
+
         let result = async_run(async {
             let mut ops = AsyncLinkedOps::new();
             let testfd = unsafe { OwnedFd::from_raw_fd(12) };
@@ -308,7 +310,7 @@ mod tests {
 
             assert_eq!(succeeded, false);
             assert_eq!(r1.value(), Err((libc::EBADF, vec![])));
-            assert_eq!(r2.value(), Err(libc::ECANCELED));
+            assert_eq!(r2.value(), Err(SystemError::new(libc::ECANCELED)));
 
             1
         });

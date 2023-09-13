@@ -12,62 +12,59 @@ use super::AsyncOpResult;
 use super::IoUringCQE;
 use super::ReactorOpParameters;
 
+use fbs_library::system_error::SystemError;
 use fbs_library::socket::Socket;
 use fbs_library::socket_address::SocketIpAddress;
 
-pub struct ResultErrno {
-}
+pub struct ResultErrno;
 
 impl AsyncOpResult for ResultErrno {
-    type Output = Result<i32, i32>;
+    type Output = Result<i32, SystemError>;
 
     fn get_result(cqe: IoUringCQE, _params: ReactorOpParameters) -> Self::Output {
-        let result: Result<i32, i32> = if cqe.result >= 0 {
+        let result = if cqe.result >= 0 {
             Ok(cqe.result)
         } else {
-            Err(-cqe.result)
+            Err(SystemError::new(-cqe.result))
         };
 
         result
     }
 }
 
-pub struct ResultDescriptor {
-}
+pub struct ResultDescriptor;
 
 impl AsyncOpResult for ResultDescriptor {
-    type Output = Result<OwnedFd, i32>;
+    type Output = Result<OwnedFd, SystemError>;
 
     fn get_result(cqe: IoUringCQE, _params: ReactorOpParameters) -> Self::Output {
-        let result: Result<OwnedFd, i32> = if cqe.result >= 0 {
+        let result = if cqe.result >= 0 {
             Ok(unsafe { OwnedFd::from_raw_fd(cqe.result) } )
         } else {
-            Err(-cqe.result)
+            Err(SystemError::new(-cqe.result))
         };
 
         result
     }
 }
 
-pub struct ResultSocket {
-}
+pub struct ResultSocket;
 
 impl AsyncOpResult for ResultSocket {
-    type Output = Result<Socket, i32>;
+    type Output = Result<Socket, SystemError>;
 
     fn get_result(cqe: IoUringCQE, _params: ReactorOpParameters) -> Self::Output {
-        let result: Result<Socket, i32> = if cqe.result >= 0 {
+        let result = if cqe.result >= 0 {
             Ok(unsafe { Socket::from_raw_fd(cqe.result) } )
         } else {
-            Err(-cqe.result)
+            Err(SystemError::new(-cqe.result))
         };
 
         result
     }
 }
 
-pub struct ResultBuffer {
-}
+pub struct ResultBuffer;
 
 impl AsyncOpResult for ResultBuffer {
     type Output = Result<Vec<u8>, (i32, Vec<u8>)>;
