@@ -23,7 +23,7 @@ async fn handle_client(fd: Socket)
         let mut buffer = vec![];
         buffer.resize(100, 0);
 
-        let read_result = async_read(&fd, buffer).await;
+        let read_result = async_read_into(&fd, buffer).await;
         match read_result {
             Ok(buffer) => {
                 println!("Got: {:?}", &buffer);

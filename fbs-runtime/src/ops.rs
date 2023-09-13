@@ -133,7 +133,7 @@ pub fn async_socket(domain: SocketDomain, socket_type: SocketType, options: i32)
     AsyncOp::new(IOUringOp::Socket(domain as i32, socket_type as i32 | options, 0))
 }
 
-pub fn async_read<T: AsRawFd>(fd: &T, buffer: Vec<u8>) -> AsyncRead {
+pub fn async_read_into<T: AsRawFd>(fd: &T, buffer: Vec<u8>) -> AsyncRead {
     AsyncOp::new(IOUringOp::Read(fd.as_raw_fd(), buffer, None))
 }
 

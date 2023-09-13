@@ -285,7 +285,7 @@ mod tests {
 
         let result = async_run(async {
             let testfd = unsafe { OwnedFd::from_raw_fd(12) };
-            let data = async_read(&testfd, vec![]);
+            let data = async_read_into(&testfd, vec![]);
             let data = data.await;
 
             assert!(data.is_err());
@@ -305,7 +305,7 @@ mod tests {
             let mut ops = AsyncLinkedOps::new();
             let testfd = unsafe { OwnedFd::from_raw_fd(12) };
 
-            let r1 = ops.add(async_read(&testfd, vec![]));
+            let r1 = ops.add(async_read_into(&testfd, vec![]));
             let r2 = ops.add(async_close(testfd));
 
             let succeeded = ops.await;
