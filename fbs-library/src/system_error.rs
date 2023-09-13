@@ -29,17 +29,17 @@ impl SystemError {
 
     #[inline]
     pub fn cancelled(&self) -> bool {
-        match self.0.kind() as i32 {
-            libc::ECANCELED => true,
-            _ => false
+        match self.0.raw_os_error() {
+            Some(libc::ECANCELED) => true,
+            _ => false,
         }
     }
 
     #[inline]
     pub fn timed_out(&self) -> bool {
-        match self.0.kind() as i32 {
-            libc::ETIMEDOUT => true,
-            _ => false
+        match self.0.raw_os_error() {
+            Some(libc::ETIMEDOUT) => true,
+            _ => false,
         }
     }
 
