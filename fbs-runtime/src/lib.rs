@@ -281,13 +281,15 @@ mod tests {
 
     #[test]
     fn local_read_test() {
+        use fbs_library::system_error::SystemError;
+
         let result = async_run(async {
             let testfd = unsafe { OwnedFd::from_raw_fd(12) };
             let data = async_read(&testfd, vec![]);
             let data = data.await;
 
             assert!(data.is_err());
-            assert_eq!(data.err().unwrap().0, libc::EBADF);
+            assert_eq!(data.err().unwrap().0, SystemError::new(libc::EBADF));
             1
         });
 
@@ -309,8 +311,8 @@ mod tests {
             let succeeded = ops.await;
 
             assert_eq!(succeeded, false);
-            assert_eq!(r1.value(), Err((libc::EBADF, vec![])));
-            assert_eq!(r2.value(), Err(SystemError::new(libc::ECANCELED)));
+            assert_eq!(r1.value(), Err((SystemError::new(libc::EBADF), vec![])));
+            assert!(r2.value().is_err_and(|e| e.cancelled()));
 
             1
         });

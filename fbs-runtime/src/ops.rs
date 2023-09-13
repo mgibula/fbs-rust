@@ -18,6 +18,31 @@ use fbs_library::socket_address::SocketIpAddress;
 
 pub struct ResultErrno;
 
+trait AsyncResultEx {
+    fn cancelled(&self) -> bool;
+    fn timed_out(&self) -> bool;
+}
+
+impl<T> AsyncResultEx for Result<T, SystemError> {
+    fn cancelled(&self) -> bool {
+        self.as_ref().is_err_and(|e| e.cancelled())
+    }
+
+    fn timed_out(&self) -> bool {
+        self.as_ref().is_err_and(|e| e.timed_out())
+    }
+}
+
+impl<T> AsyncResultEx for Result<T, (SystemError, Vec<u8>)> {
+    fn cancelled(&self) -> bool {
+        self.as_ref().is_err_and(|e| e.0.cancelled())
+    }
+
+    fn timed_out(&self) -> bool {
+        self.as_ref().is_err_and(|e| e.0.timed_out())
+    }
+}
+
 impl AsyncOpResult for ResultErrno {
     type Output = Result<i32, SystemError>;
 
@@ -67,7 +92,7 @@ impl AsyncOpResult for ResultSocket {
 pub struct ResultBuffer;
 
 impl AsyncOpResult for ResultBuffer {
-    type Output = Result<Vec<u8>, (i32, Vec<u8>)>;
+    type Output = Result<Vec<u8>, (SystemError, Vec<u8>)>;
 
     fn get_result(cqe: IoUringCQE, params: ReactorOpParameters) -> Self::Output {
         let mut buffer = params.buffer;
@@ -75,7 +100,7 @@ impl AsyncOpResult for ResultBuffer {
             buffer.resize(cqe.result as usize, 0);
             Ok(buffer)
         } else {
-            Err((-cqe.result, buffer))
+            Err((SystemError::new(-cqe.result), buffer))
         };
 
         result
