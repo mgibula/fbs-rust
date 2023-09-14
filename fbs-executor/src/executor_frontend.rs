@@ -1,5 +1,5 @@
 use std::future::Future;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -12,13 +12,24 @@ use super::ExecutorFrontend;
 
 impl ExecutorFrontend {
     pub fn spawn<T: 'static>(&self, future: impl Future<Output = T> + 'static) -> TaskHandle<T> {
-        let future = Box::pin(future);
-        let task = Rc::new(RefCell::new(TaskData::new(future, self.channel.clone())));
-        task.borrow_mut().own_ptr = Rc::downgrade(&task);
+        let result_ptr = Rc::new(Cell::new(Option::<T>::None));
+        let result_ptr_inner = result_ptr.clone();
+        let future = Box::pin(async move {
+            result_ptr_inner.set(Some(future.await));
+        });
+
+        let task = Rc::new(RefCell::new(TaskData {
+            channel: self.channel.clone(),
+            future,
+            wait_index: None,
+            completed: false,
+            waiters: vec![],
+        }));
 
         self.channel.send(ExecutorCmd::Schedule(task.clone()));
         TaskHandle {
-            task: task.clone(),
+            task,
+            result: result_ptr,
         }
     }
 

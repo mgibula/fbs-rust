@@ -3,11 +3,11 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::task::{Context, Poll};
 
+use super::TaskData;
 use super::IndexedList;
 use super::ExecutorCmd;
 use super::Executor;
 use super::ExecutorFrontend;
-use super::Task;
 use super::channel_create;
 
 impl Executor {
@@ -55,7 +55,7 @@ impl Executor {
             match cmd {
                 None => break,
                 Some(ExecutorCmd::Schedule(task)) => {
-                    let current_wait_index = task.borrow_mut().set_wait_index(None);
+                    let current_wait_index = task.borrow_mut().wait_index.take();
                     if let Some(wait_index) = current_wait_index {
                         self.waiting.remove(wait_index);
                     }
@@ -69,24 +69,29 @@ impl Executor {
         }
     }
 
-    fn process_task(&mut self, task: Rc<RefCell<dyn Task>>) {
-        if !task.borrow().can_execute() {
+    fn process_task(&mut self, task: Rc<RefCell<TaskData>>) {
+        if task.borrow().completed {
             return;
         }
 
-        let waker = task.borrow().get_waker();
+        let waker = super::task_data::task_into_waker(Rc::into_raw(task.clone()));
         let mut context = Context::from_waker(&waker);
 
-        let poll_result = task.borrow_mut().poll(&mut context);
-        match poll_result {
+        let mut task_data = task.borrow_mut();
+        match task_data.future.as_mut().poll(&mut context) {
             Poll::Pending => {
                 let index = self.waiting.allocate();
-                task.borrow_mut().set_wait_index(Some(index));
+                task_data.wait_index = Some(index);
+
+                drop(task_data);
                 self.waiting.insert_at(index, task);
             },
             Poll::Ready(()) => {
-                task.borrow_mut().wake_waiters();
+                task_data.completed = true;
+                task_data.waiters.iter().for_each(|w| w.wake_by_ref());
+                task_data.waiters.clear();
             },
-        };
+        }
     }
+
 }
