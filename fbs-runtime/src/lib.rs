@@ -346,4 +346,27 @@ mod tests {
         // ensure it actually executed
         assert_eq!(result, 1);
     }
+
+    #[test]
+    fn local_timeout_test() {
+        use std::time::{Duration, SystemTime};
+
+        let now = SystemTime::now();
+
+        let result = async_run(async {
+            let op = async_sleep(Duration::new(0, 1_000_000));
+            let result = op.await;
+
+            assert!(result.is_ok());
+
+            1
+        });
+
+        let elapsed = now.elapsed();
+
+        assert!(elapsed.is_ok_and(|e| e.as_nanos() >= 1_000_000));
+
+        // ensure it actually executed
+        assert_eq!(result, 1);
+    }
 }

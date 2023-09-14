@@ -1,6 +1,7 @@
-use std::cell::RefCell;
+use std::{cell::RefCell, mem};
 use std::ffi::CString;
 use std::rc::Rc;
+use std::time::Duration;
 
 use liburing_sys::*;
 use io_uring::*;
@@ -36,6 +37,7 @@ impl IOUringOpType {
     pub const SOCKET: u32 = io_uring_op_IORING_OP_SOCKET;
     pub const ACCEPT: u32 = io_uring_op_IORING_OP_ACCEPT;
     pub const CONNECT: u32 = io_uring_op_IORING_OP_CONNECT;
+    pub const TIMEOUT: u32 = io_uring_op_IORING_OP_TIMEOUT;
 }
 
 pub enum IOUringOp {
@@ -49,10 +51,12 @@ pub enum IOUringOp {
     Socket(i32, i32, i32),
     Accept(i32, i32),
     Connect(i32, SocketIpAddress),
+    Sleep(Duration),
 }
 
 #[derive(Default)]
 pub struct ReactorOpParameters {
+    timeout: __kernel_timespec,
     path: CString,
     address: SocketAddressBinary,
     pub buffer: Vec<u8>,
@@ -60,7 +64,7 @@ pub struct ReactorOpParameters {
 
 impl ReactorOpParameters {
     fn new() -> Self {
-        ReactorOpParameters { path: CString::default(), address: SocketAddressBinary::default(), buffer: Vec::default() }
+        ReactorOpParameters::default()
     }
 }
 
@@ -199,6 +203,12 @@ impl Reactor {
                         rop.parameters.address = address.to_binary();
 
                         io_uring_prep_connect(sqe.ptr, fd, rop.parameters.address.sockaddr_ptr(), rop.parameters.address.length() as u32);
+                    },
+                    IOUringOp::Sleep(timeout) => {
+                        rop.parameters.timeout.tv_sec = timeout.as_secs() as i64;
+                        rop.parameters.timeout.tv_nsec = timeout.subsec_nanos() as i64;
+
+                        io_uring_prep_timeout(sqe.ptr, &mut rop.parameters.timeout, 0, 0);
                     },
                     IOUringOp::InProgress(_) => panic!("op already scheduled"),
                 }

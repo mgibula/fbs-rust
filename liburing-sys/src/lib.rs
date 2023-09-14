@@ -29,3 +29,9 @@ pub const IOSQE_IO_HARDLINK: u32 = 1 << IOSQE_IO_HARDLINK_BIT;
 pub const IOSQE_ASYNC: u32 = 1 << IOSQE_ASYNC_BIT;
 pub const IOSQE_BUFFER_SELECT: u32 = 1 << IOSQE_BUFFER_SELECT_BIT;
 pub const IOSQE_CQE_SKIP_SUCCESS: u32 = 1 << IOSQE_CQE_SKIP_SUCCESS_BIT;
+
+impl Default for __kernel_timespec {
+    fn default() -> Self {
+        unsafe { std::mem::zeroed() }
+    }
+}

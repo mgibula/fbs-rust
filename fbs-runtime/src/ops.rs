@@ -2,6 +2,7 @@ use std::os::fd::{OwnedFd, FromRawFd, IntoRawFd, AsRawFd};
 use std::os::unix::prelude::OsStrExt;
 use std::path::Path;
 use std::ffi::CString;
+use std::time::Duration;
 
 use super::AsyncOp;
 use super::IOUringOp;
@@ -15,8 +16,6 @@ use super::ReactorOpParameters;
 use fbs_library::system_error::SystemError;
 use fbs_library::socket::Socket;
 use fbs_library::socket_address::SocketIpAddress;
-
-pub struct ResultErrno;
 
 trait AsyncResultEx {
     fn cancelled(&self) -> bool;
@@ -43,6 +42,8 @@ impl<T> AsyncResultEx for Result<T, (SystemError, Vec<u8>)> {
     }
 }
 
+pub struct ResultErrno;
+
 impl AsyncOpResult for ResultErrno {
     type Output = Result<i32, SystemError>;
 
@@ -54,6 +55,20 @@ impl AsyncOpResult for ResultErrno {
         };
 
         result
+    }
+}
+
+pub struct ResultErrnoTimeout;
+
+impl AsyncOpResult for ResultErrnoTimeout {
+    type Output = Result<i32, SystemError>;
+
+    fn get_result(cqe: IoUringCQE, _params: ReactorOpParameters) -> Self::Output {
+        match cqe.result {
+            i if cqe.result > 0 => Ok(i),
+            _i if cqe.result == -libc::ETIME => Ok(0),
+            i => Err(SystemError::new(-i))
+        }
     }
 }
 
@@ -115,6 +130,7 @@ pub type AsyncRead = AsyncOp::<ResultBuffer>;
 pub type AsyncWrite = AsyncOp::<ResultBuffer>;
 pub type AsyncAccept = AsyncOp::<ResultSocket>;
 pub type AsyncConnect = AsyncOp::<ResultErrno>;
+pub type AsyncTimeout = AsyncOp::<ResultErrnoTimeout>;
 
 pub fn async_nop() -> AsyncNop {
     AsyncOp::new(IOUringOp::Nop())
@@ -147,4 +163,8 @@ pub fn async_accept<T: AsRawFd>(fd: &T, flags: i32) -> AsyncAccept {
 
 pub fn async_connect<T: AsRawFd>(fd: &T, address: SocketIpAddress) -> AsyncConnect {
     AsyncOp::new(IOUringOp::Connect(fd.as_raw_fd(), address))
+}
+
+pub fn async_sleep(timeout: Duration) -> AsyncTimeout {
+    AsyncOp::new(IOUringOp::Sleep(timeout))
 }
