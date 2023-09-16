@@ -1,4 +1,4 @@
-use std::{cell::RefCell, mem};
+use std::cell::RefCell;
 use std::ffi::CString;
 use std::rc::Rc;
 use std::time::Duration;
@@ -62,12 +62,6 @@ pub struct ReactorOpParameters {
     pub buffer: Vec<u8>,
 }
 
-impl ReactorOpParameters {
-    fn new() -> Self {
-        ReactorOpParameters::default()
-    }
-}
-
 enum OpState {
     Unscheduled(),
     Scheduled(OpCompletion),
@@ -83,7 +77,7 @@ impl ReactorOp {
     fn new() -> Self {
         ReactorOp {
             state: OpState::Unscheduled(),
-            parameters: ReactorOpParameters::new(),
+            parameters: ReactorOpParameters::default(),
         }
     }
 }
@@ -162,11 +156,10 @@ impl Reactor {
         self.uncommited += ops_count;
 
         ops.into_iter().enumerate().for_each(|(op_index, req)| {
-            let rop = ReactorOpPtr::new();
-
             let sqe = self.get_sqe().expect("Can't get SQE from io_uring");
             let index = self.get_next_index();
 
+            let rop = ReactorOpPtr::new();
             let requested = std::mem::replace(&mut req.op, IOUringOp::InProgress(rop.clone()));
 
             unsafe {
@@ -179,17 +172,17 @@ impl Reactor {
                         io_uring_prep_close(sqe.ptr, fd);
                     },
                     IOUringOp::Open(path, flags, mode) => {
-                        rop.parameters.path = CString::new(path.as_bytes()).expect("Null character in filename");
+                        rop.parameters.path = path;
 
                         io_uring_prep_openat(sqe.ptr, libc::AT_FDCWD, rop.parameters.path.as_ptr(), flags, mode);
                     },
-                    IOUringOp::Read(fd, mut buffer, offset) => {
-                        rop.parameters.buffer = std::mem::take(&mut buffer);
+                    IOUringOp::Read(fd, buffer, offset) => {
+                        rop.parameters.buffer = buffer;
 
                         io_uring_prep_read(sqe.ptr, fd, rop.parameters.buffer.as_mut_ptr() as *mut libc::c_void, rop.parameters.buffer.len() as u32, offset.unwrap_or(u64::MAX));
                     },
-                    IOUringOp::Write(fd, mut buffer, offset) => {
-                        rop.parameters.buffer = std::mem::take(&mut buffer);
+                    IOUringOp::Write(fd, buffer, offset) => {
+                        rop.parameters.buffer = buffer;
 
                         io_uring_prep_write(sqe.ptr, fd, rop.parameters.buffer.as_ptr() as *mut libc::c_void, rop.parameters.buffer.len() as u32, offset.unwrap_or(u64::MAX));
                     },
