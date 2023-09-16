@@ -1,4 +1,4 @@
-use std::collections::LinkedList;
+use std::collections::VecDeque;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::task::{Context, Poll};
@@ -15,7 +15,7 @@ impl Executor {
         let (rx, _) = channel_create();
 
         Executor {
-            ready: LinkedList::default(),
+            ready: VecDeque::with_capacity(10),
             waiting: IndexedList::new(),
             channel: rx,
         }

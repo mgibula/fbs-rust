@@ -2,7 +2,7 @@ use std::task::Waker;
 use std::cell::{RefCell, Cell};
 use std::rc::Rc;
 use std::pin::Pin;
-use std::collections::LinkedList;
+use std::collections::VecDeque;
 use std::future::Future;
 use misc::channel::{ChannelTx, ChannelRx, channel_create};
 use misc::indexed_list::IndexedList;
@@ -21,7 +21,7 @@ enum ExecutorCmd {
 }
 
 pub struct Executor {
-    ready: LinkedList<Rc<RefCell<TaskData>>>,
+    ready: VecDeque<Rc<RefCell<TaskData>>>,
     waiting: IndexedList<Rc<RefCell<TaskData>>>,
     channel: ChannelRx<ExecutorCmd>,
 }
