@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::ffi::CString;
 use std::rc::Rc;
 use std::time::Duration;
@@ -69,38 +69,42 @@ enum OpState {
 }
 
 struct ReactorOp {
-    state: OpState,
-    parameters: ReactorOpParameters,
+    state: Cell<OpState>,
+    parameters: RefCell<ReactorOpParameters>,
 }
 
 impl ReactorOp {
     fn new() -> Self {
         ReactorOp {
-            state: OpState::Unscheduled(),
-            parameters: ReactorOpParameters::default(),
+            state: Cell::new(OpState::Unscheduled()),
+            parameters: RefCell::new(ReactorOpParameters::default()),
         }
     }
 }
 
 #[derive(Clone)]
 pub struct ReactorOpPtr {
-    ptr: Rc<RefCell<ReactorOp>>,
+    ptr: Rc<ReactorOp>,
 }
 
 impl ReactorOpPtr {
     pub fn new() -> Self {
-        ReactorOpPtr { ptr: Rc::new(RefCell::new(ReactorOp::new())) }
+        ReactorOpPtr { ptr: Rc::new(ReactorOp::new()) }
     }
 
     pub fn result_code(&self) -> Option<i32> {
-        match self.ptr.borrow().state {
+        let old = self.ptr.state.replace(OpState::Unscheduled());
+        match old {
             OpState::Completed(result) => Some(result),
-            _ => None,
+            _ => {
+                self.ptr.state.set(old);
+                None
+            },
         }
     }
 
     fn complete_op(&mut self, cqe: IoUringCQE, params: ReactorOpParameters) {
-        let completion = std::mem::replace(&mut self.ptr.borrow_mut().state, OpState::Completed(cqe.result));
+        let completion = self.ptr.state.replace(OpState::Completed(cqe.result));
         if let OpState::Scheduled(Some(completion)) = completion {
             completion(cqe, params);
         }
@@ -163,7 +167,7 @@ impl Reactor {
             let requested = std::mem::replace(&mut req.op, IOUringOp::InProgress(rop.clone()));
 
             unsafe {
-                let mut rop = rop.ptr.borrow_mut();
+                let mut parameters = rop.ptr.parameters.borrow_mut();
                 match requested {
                     IOUringOp::Nop() => {
                         io_uring_prep_nop(sqe.ptr);
@@ -172,19 +176,19 @@ impl Reactor {
                         io_uring_prep_close(sqe.ptr, fd);
                     },
                     IOUringOp::Open(path, flags, mode) => {
-                        rop.parameters.path = path;
+                        parameters.path = path;
 
-                        io_uring_prep_openat(sqe.ptr, libc::AT_FDCWD, rop.parameters.path.as_ptr(), flags, mode);
+                        io_uring_prep_openat(sqe.ptr, libc::AT_FDCWD, parameters.path.as_ptr(), flags, mode);
                     },
                     IOUringOp::Read(fd, buffer, offset) => {
-                        rop.parameters.buffer = buffer;
+                        parameters.buffer = buffer;
 
-                        io_uring_prep_read(sqe.ptr, fd, rop.parameters.buffer.as_mut_ptr() as *mut libc::c_void, rop.parameters.buffer.len() as u32, offset.unwrap_or(u64::MAX));
+                        io_uring_prep_read(sqe.ptr, fd, parameters.buffer.as_mut_ptr() as *mut libc::c_void, parameters.buffer.len() as u32, offset.unwrap_or(u64::MAX));
                     },
                     IOUringOp::Write(fd, buffer, offset) => {
-                        rop.parameters.buffer = buffer;
+                        parameters.buffer = buffer;
 
-                        io_uring_prep_write(sqe.ptr, fd, rop.parameters.buffer.as_ptr() as *mut libc::c_void, rop.parameters.buffer.len() as u32, offset.unwrap_or(u64::MAX));
+                        io_uring_prep_write(sqe.ptr, fd, parameters.buffer.as_ptr() as *mut libc::c_void, parameters.buffer.len() as u32, offset.unwrap_or(u64::MAX));
                     },
                     IOUringOp::Socket(domain, socket_type, protocol) => {
                         io_uring_prep_socket(sqe.ptr, domain, socket_type, protocol, 0);
@@ -193,20 +197,20 @@ impl Reactor {
                         io_uring_prep_accept(sqe.ptr, fd, std::ptr::null_mut(), std::ptr::null_mut(), flags);
                     },
                     IOUringOp::Connect(fd, address) => {
-                        rop.parameters.address = address.to_binary();
+                        parameters.address = address.to_binary();
 
-                        io_uring_prep_connect(sqe.ptr, fd, rop.parameters.address.sockaddr_ptr(), rop.parameters.address.length() as u32);
+                        io_uring_prep_connect(sqe.ptr, fd, parameters.address.sockaddr_ptr(), parameters.address.length() as u32);
                     },
                     IOUringOp::Sleep(timeout) => {
-                        rop.parameters.timeout.tv_sec = timeout.as_secs() as i64;
-                        rop.parameters.timeout.tv_nsec = timeout.subsec_nanos() as i64;
+                        parameters.timeout.tv_sec = timeout.as_secs() as i64;
+                        parameters.timeout.tv_nsec = timeout.subsec_nanos() as i64;
 
-                        io_uring_prep_timeout(sqe.ptr, &mut rop.parameters.timeout, 0, 0);
+                        io_uring_prep_timeout(sqe.ptr, &mut parameters.timeout, 0, 0);
                     },
                     IOUringOp::InProgress(_) => panic!("op already scheduled"),
                 }
 
-                rop.state = OpState::Scheduled(req.completion.take());
+                rop.ptr.state.set(OpState::Scheduled(req.completion.take()));
 
                 let mut flags = 0;
                 if op_index as u32 != ops_count - 1 {
@@ -274,7 +278,7 @@ impl Reactor {
         self.ops_free_entries.push(index);
         self.ring.cqe_seen(cqe);
 
-        let params = std::mem::take(&mut op.ptr.borrow_mut().parameters);
+        let params = op.ptr.parameters.take();
         op.complete_op(cqe.copy_from(), params);
     }
 
