@@ -5,7 +5,6 @@ use std::rc::Rc;
 use std::cell::Cell;
 use std::slice;
 use std::task::{Context, Poll};
-use std::marker::PhantomData;
 use thiserror::Error;
 
 use fbs_library::open_mode::OpenMode;
@@ -86,7 +85,7 @@ pub trait AsyncOpResult : Unpin {
     fn get_result(cqe: IoUringCQE, params: ReactorOpParameters) -> Self::Output;
 }
 
-pub struct AsyncOp<T: AsyncOpResult> (IOUringReq, Rc<Cell<Option<T::Output>>>, PhantomData<T>);
+pub struct AsyncOp<T: AsyncOpResult> (IOUringReq, Rc<Cell<Option<T::Output>>>);
 
 impl<T: AsyncOpResult> AsyncOp<T> {
     fn new(op: IOUringOp) -> Self {
@@ -95,7 +94,7 @@ impl<T: AsyncOpResult> AsyncOp<T> {
             op,
         };
 
-        Self(req, Rc::new(Cell::new(None)), PhantomData)
+        Self(req, Rc::new(Cell::new(None)))
     }
 
     pub fn schedule(mut self, handler: impl Fn(T::Output) + 'static) {
@@ -114,9 +113,9 @@ impl<T: AsyncOpResult> Future for AsyncOp<T> {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         match &self.0.op {
-            IOUringOp::InProgress(rop) => {
-                match rop.result_code() {
-                    Some(_) => Poll::Ready(self.1.take().unwrap()),
+            IOUringOp::InProgress() => {
+                match self.1.take() {
+                    Some(value) => Poll::Ready(value),
                     None => Poll::Pending,
                 }
             },

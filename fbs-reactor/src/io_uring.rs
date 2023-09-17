@@ -23,7 +23,7 @@ pub struct IoUringSQEPtr {
     pub ptr: *mut io_uring_sqe,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct IoUringCQE {
     pub result: i32,
     pub flags: u32,

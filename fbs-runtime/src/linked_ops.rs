@@ -2,6 +2,7 @@ use super::AsyncOpResult;
 use super::AsyncOp;
 use super::IOUringReq;
 use super::IOUringOp;
+use super::IoUringCQE;
 
 use std::task::{Context, Poll};
 use std::pin::Pin;
@@ -13,6 +14,7 @@ use super::REACTOR;
 
 pub struct AsyncLinkedOps {
     ops: Vec<IOUringReq>,
+    last_result: Rc<Cell<Option<IoUringCQE>>>,
 }
 
 pub struct DelayedResult<T> {
@@ -39,18 +41,20 @@ impl<T> DelayedResult<T> {
 
 impl AsyncLinkedOps {
     pub fn new() -> Self {
-        AsyncLinkedOps { ops: vec![] }
+        AsyncLinkedOps { ops: vec![], last_result: Rc::new(Cell::new(None)) }
     }
 
-    pub fn add<T: AsyncOpResult>(&mut self, mut op: AsyncOp<T>) -> DelayedResult<T::Output> {
-        let result_ptr = op.1;
+    pub fn add<T: AsyncOpResult>(&mut self, op: AsyncOp<T>) -> DelayedResult<T::Output> {
+        let AsyncOp::<T>(mut op_req, result_ptr) = op;
+
+        // unsafe needed to move out member variables out
         let result = DelayedResult::new(result_ptr.clone());
 
-        op.0.completion = Some(Box::new(move |cqe, params| {
+        op_req.completion = Some(Box::new(move |cqe, params| {
             result_ptr.set(Some(T::get_result(cqe, params)));
         }));
 
-        self.ops.push(op.0);
+        self.ops.push(op_req);
         result
     }
 }
@@ -59,6 +63,8 @@ impl Future for AsyncLinkedOps {
     type Output = bool;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let last_result = self.last_result.clone();
+
         // return immediately if there are no ops
         let last_op = match self.ops.last_mut() {
             None                         => return Poll::Ready(true),
@@ -66,10 +72,10 @@ impl Future for AsyncLinkedOps {
         };
 
         match &last_op.op {
-            IOUringOp::InProgress(rop) => {
-                match rop.result_code() {
-                    Some(result)   => { return Poll::Ready(result >= 0) },
-                    None                => { return Poll::Pending },
+            IOUringOp::InProgress() => {
+                match last_result.get() {
+                    Some(cqe)   => { return Poll::Ready(cqe.result >= 0) },
+                    None                    => { return Poll::Pending },
                 }
             },
             _ => { /* handled below */ }
@@ -82,6 +88,7 @@ impl Future for AsyncLinkedOps {
                 cb(cqe, params);
             }
 
+            last_result.set(Some(cqe));
             waker.wake_by_ref();
         }));
 
