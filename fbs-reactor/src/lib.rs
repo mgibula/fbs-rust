@@ -1,6 +1,4 @@
-use std::cell::{Cell, RefCell};
 use std::ffi::CString;
-use std::rc::Rc;
 use std::time::Duration;
 
 use liburing_sys::*;
@@ -78,53 +76,41 @@ enum OpState {
 }
 
 struct ReactorOp {
-    state: Cell<OpState>,
-    parameters: RefCell<ReactorOpParameters>,
+    state: OpState,
+    parameters: ReactorOpParameters,
 }
 
 impl ReactorOp {
     fn new() -> Self {
         ReactorOp {
-            state: Cell::new(OpState::Unscheduled()),
-            parameters: RefCell::new(ReactorOpParameters::default()),
+            state: OpState::Unscheduled(),
+            parameters: ReactorOpParameters::default(),
         }
     }
 
-    fn reset(&self) {
-        self.state.set(OpState::Unscheduled());
-        self.parameters.borrow_mut().reset();
+    fn reset(&mut self) {
+        self.state = OpState::Unscheduled();
+        self.parameters.reset();
     }
 }
 
-#[derive(Clone)]
 struct ReactorOpPtr {
-    ptr: Rc<ReactorOp>,
+    ptr: Box<ReactorOp>,
 }
 
 impl ReactorOpPtr {
     pub fn new() -> Self {
-        ReactorOpPtr { ptr: Rc::new(ReactorOp::new()) }
-    }
-
-    pub fn result_code(&self) -> Option<i32> {
-        let old = self.ptr.state.replace(OpState::Unscheduled());
-        match old {
-            OpState::Completed(result) => Some(result),
-            _ => {
-                self.ptr.state.set(old);
-                None
-            },
-        }
+        ReactorOpPtr { ptr: Box::new(ReactorOp::new()) }
     }
 
     fn complete_op(&mut self, cqe: IoUringCQE, params: ReactorOpParameters) {
-        let completion = self.ptr.state.replace(OpState::Completed(cqe.result));
+        let completion = std::mem::replace(&mut self.ptr.state, OpState::Completed(cqe.result));
         if let OpState::Scheduled(Some(completion)) = completion {
             completion(cqe, params);
         }
     }
 
-    fn reset(&self) {
+    fn reset(&mut self) {
         self.ptr.reset()
     }
 }
@@ -189,11 +175,11 @@ impl Reactor {
             let sqe = self.get_sqe().expect("Can't get SQE from io_uring");
             let index = self.get_next_index();
 
-            let rop = self.get_rop();
+            let mut rop = self.get_rop();
             let requested = std::mem::replace(&mut req.op, IOUringOp::InProgress());
 
             unsafe {
-                let mut parameters = rop.ptr.parameters.borrow_mut();
+                let parameters = &mut rop.ptr.parameters;
                 match requested {
                     IOUringOp::Nop() => {
                         io_uring_prep_nop(sqe.ptr);
@@ -236,7 +222,7 @@ impl Reactor {
                     IOUringOp::InProgress() => panic!("op already scheduled"),
                 }
 
-                rop.ptr.state.set(OpState::Scheduled(req.completion.take()));
+                rop.ptr.state = OpState::Scheduled(req.completion.take());
 
                 let mut flags = 0;
                 if op_index as u32 != ops_count - 1 {
@@ -252,7 +238,7 @@ impl Reactor {
 
     }
 
-    fn retire_rop(&mut self, rop: ReactorOpPtr) {
+    fn retire_rop(&mut self, mut rop: ReactorOpPtr) {
         rop.reset();
         self.rop_cache.push(rop)
     }
@@ -309,7 +295,7 @@ impl Reactor {
         self.ops_free_entries.push(index);
         self.ring.cqe_seen(cqe);
 
-        let params = rop.ptr.parameters.take();
+        let params = std::mem::take(&mut rop.ptr.parameters);
         rop.complete_op(cqe.copy_from(), params);
         self.retire_rop(rop);
     }
