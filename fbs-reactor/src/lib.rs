@@ -72,7 +72,7 @@ impl ReactorOpParameters {
 enum OpState {
     Unscheduled(),
     Scheduled(OpCompletion),
-    Completed(i32),
+    Completed(),
 }
 
 struct ReactorOp {
@@ -104,7 +104,7 @@ impl ReactorOpPtr {
     }
 
     fn complete_op(&mut self, cqe: IoUringCQE, params: ReactorOpParameters) {
-        let completion = std::mem::replace(&mut self.ptr.state, OpState::Completed(cqe.result));
+        let completion = std::mem::replace(&mut self.ptr.state, OpState::Completed());
         if let OpState::Scheduled(Some(completion)) = completion {
             completion(cqe, params);
         }
