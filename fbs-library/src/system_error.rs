@@ -43,6 +43,13 @@ impl SystemError {
         }
     }
 
+    pub fn errno(&self) -> i32 {
+        match self.0.raw_os_error() {
+            Some(value) => value,
+            None => 0,
+        }
+    }
+
     pub fn kind(&self) -> std::io::ErrorKind {
         self.0.kind()
     }
