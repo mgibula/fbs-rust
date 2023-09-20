@@ -5,6 +5,7 @@ use liburing_sys::*;
 use io_uring::*;
 use thiserror::Error;
 use fbs_library::socket_address::{SocketIpAddress, SocketAddressBinary};
+use fbs_library::system_error::SystemError;
 
 pub use io_uring::IoUringCQE;
 
@@ -164,7 +165,7 @@ impl Reactor {
         let ops_count = ops.len() as u32;
 
         if self.ring.sq_space_left() < ops_count {
-            self.submit();
+            self.submit().expect("Error on submit");
         }
 
         if self.ring.sq_space_left() < ops_count {
@@ -280,15 +281,15 @@ impl Reactor {
         self.ring.get_sqe().ok_or_else(|| ReactorError::NoSQEAvailable)
     }
 
-    fn submit(&mut self) -> i32 {
+    fn submit(&mut self) -> Result<i32, IoUringError> {
         let mut result = 0;
 
         if self.uncommited > 0 {
-            result = self.ring.submit();
+            result = self.ring.submit()?;
             self.uncommited = 0;
         }
 
-        result
+        Ok(result)
     }
 
     pub fn process_ops(&mut self) -> Result<bool, IoUringError> {
@@ -298,7 +299,7 @@ impl Reactor {
 
         let handled = self.process_completed_ops();
         if !handled {
-            self.submit();
+            self.submit()?;
             self.wait_for_completion()?;
         }
 

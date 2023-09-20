@@ -5,6 +5,7 @@ use std::ptr;
 
 use liburing_sys::*;
 use thiserror::Error;
+use fbs_library::system_error::SystemError;
 
 #[derive(Debug, Clone, Copy)]
 pub struct IoUringParams {
@@ -51,6 +52,8 @@ pub enum IoUringError {
     TryAgain,
     #[error("invalid arguments specified")]
     InvalidArguments,
+    #[error("system call error")]
+    SubmitError(SystemError),
 }
 
 impl Drop for IoUring {
@@ -106,8 +109,15 @@ impl IoUring {
         unsafe { io_uring_sq_space_left(&self.ring) }
     }
 
-    pub fn submit(&mut self) -> i32 {
-        unsafe { io_uring_submit(&mut self.ring) }
+    pub fn submit(&mut self) -> Result<i32, IoUringError> {
+        unsafe {
+            let result = io_uring_submit(&mut self.ring);
+            if result >= 0 {
+                return Ok(result);
+            } else {
+                return Err(IoUringError::SubmitError(SystemError::new(-result)));
+            }
+        }
     }
 
     pub fn get_sqe(&mut self) -> Option<IoUringSQEPtr> {
