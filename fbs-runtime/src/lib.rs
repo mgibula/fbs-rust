@@ -5,6 +5,7 @@ use std::rc::Rc;
 use std::cell::Cell;
 use std::slice;
 use std::task::{Context, Poll};
+use std::time::Duration;
 use thiserror::Error;
 
 use fbs_library::open_mode::OpenMode;
@@ -90,8 +91,9 @@ pub struct AsyncOp<T: AsyncOpResult> (IOUringReq, Rc<Cell<Option<T::Output>>>);
 impl<T: AsyncOpResult> AsyncOp<T> {
     fn new(op: IOUringOp) -> Self {
         let req = IOUringReq {
-            completion: None,
             op,
+            completion: None,
+            timeout: None,
         };
 
         Self(req, Rc::new(Cell::new(None)))
@@ -105,6 +107,16 @@ impl<T: AsyncOpResult> AsyncOp<T> {
         REACTOR.with(|r| {
             r.borrow_mut().schedule_linked2(slice::from_mut(&mut self.0))
         });
+    }
+
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.0.timeout = Some(timeout);
+        self
+    }
+
+    pub fn clear_timeout(mut self) -> Self {
+        self.0.timeout = None;
+        self
     }
 }
 
@@ -364,6 +376,25 @@ mod tests {
         let elapsed = now.elapsed();
 
         assert!(elapsed.is_ok_and(|e| e.as_nanos() >= 1_000_000));
+
+        // ensure it actually executed
+        assert_eq!(result, 1);
+    }
+
+    #[test]
+    fn local_read_timeout_test() {
+        let result = async_run(async {
+            let testfd = unsafe { OwnedFd::from_raw_fd(0) };
+            let mut buffer = Vec::new();
+            buffer.resize(100, 0);
+
+            let data = async_read_into(&testfd, buffer).timeout(Duration::new(0, 1_000_000));
+            let data = data.await;
+
+            assert!(data.is_err());
+            assert!(data.err().unwrap().0.cancelled());
+            1
+        });
 
         // ensure it actually executed
         assert_eq!(result, 1);
