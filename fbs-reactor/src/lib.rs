@@ -5,7 +5,6 @@ use liburing_sys::*;
 use io_uring::*;
 use thiserror::Error;
 use fbs_library::socket_address::{SocketIpAddress, SocketAddressBinary};
-use fbs_library::system_error::SystemError;
 
 pub use io_uring::IoUringCQE;
 
@@ -16,8 +15,6 @@ pub enum ReactorError {
     #[error("io_uring has no more SQEs available")]
     NoSQEAvailable,
 }
-
-const CQE_IGNORE: u64 = u64::MAX;
 
 pub type OpCompletion = Option<Box<dyn Fn(IoUringCQE, ReactorOpParameters)>>;
 
@@ -249,11 +246,8 @@ impl Reactor {
     }
 
     fn enqueue_timeout(&mut self, timeout: Duration, parameters: &mut ReactorOpParameters, is_last: bool) {
-        self.in_flight += 1;
-        self.uncommited += 1;
-
         let sqe = self.get_sqe().expect("Can't get SQE from io_uring");
-        let mut flags = 0;
+        let mut flags = IOSQE_CQE_SKIP_SUCCESS;
         if !is_last {
             flags |= IOSQE_IO_LINK;
         }
@@ -263,7 +257,6 @@ impl Reactor {
             parameters.timeout.tv_nsec = timeout.subsec_nanos() as i64;
 
             io_uring_prep_link_timeout(sqe.ptr, &mut parameters.timeout, 0);
-            io_uring_sqe_set_data64(sqe.ptr, CQE_IGNORE);
             io_uring_sqe_set_flags(sqe.ptr, flags);
         }
     }
@@ -320,16 +313,14 @@ impl Reactor {
         self.in_flight -= 1;
 
         let index = cqe.get_data64();
-        if index != CQE_IGNORE {
-            let index = index as usize;
-            let mut rop = self.ops[index].take().expect("io_uring returned completed op with incorrect index");
+        let index = index as usize;
+        let mut rop = self.ops[index].take().expect("io_uring returned completed op with incorrect index");
 
-            self.ops_free_entries.push(index);
+        self.ops_free_entries.push(index);
 
-            let params = std::mem::take(&mut rop.ptr.parameters);
-            rop.complete_op(cqe.copy_from(), params);
-            self.retire_rop(rop);
-        }
+        let params = std::mem::take(&mut rop.ptr.parameters);
+        rop.complete_op(cqe.copy_from(), params);
+        self.retire_rop(rop);
 
         self.ring.cqe_seen(cqe);
     }
