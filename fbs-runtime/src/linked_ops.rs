@@ -46,8 +46,6 @@ impl AsyncLinkedOps {
 
     pub fn add<T: AsyncOpResult>(&mut self, op: AsyncOp<T>) -> DelayedResult<T::Output> {
         let AsyncOp::<T>(mut op_req, result_ptr) = op;
-
-        // unsafe needed to move out member variables out
         let result = DelayedResult::new(result_ptr.clone());
 
         op_req.completion = Some(Box::new(move |cqe, params| {
