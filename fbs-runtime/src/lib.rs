@@ -252,8 +252,7 @@ mod tests {
     #[test]
     fn local_close_test() {
         let result = async_run(async {
-            let testfd = unsafe { OwnedFd::from_raw_fd(123) };
-            let result = async_close(testfd).await;
+            let result = async_close(-1).await;
             assert!(result.is_err());
             1
         });
@@ -265,7 +264,7 @@ mod tests {
     #[test]
     fn local_close_test2() {
         let result = async_run(async {
-            let testfd = unsafe { OwnedFd::from_raw_fd(0) };
+            let testfd = unsafe { OwnedFd::from_raw_fd(libc::dup(0)) };
             let result = async_close(testfd).await;
             assert!(result.is_ok());
             1
@@ -295,8 +294,7 @@ mod tests {
         use fbs_library::system_error::SystemError;
 
         let result = async_run(async {
-            let testfd = unsafe { OwnedFd::from_raw_fd(12) };
-            let data = async_read_into(&testfd, vec![]);
+            let data = async_read_into(&-1, vec![]);
             let data = data.await;
 
             assert!(data.is_err());
@@ -314,10 +312,9 @@ mod tests {
 
         let result = async_run(async {
             let mut ops = AsyncLinkedOps::new();
-            let testfd = unsafe { OwnedFd::from_raw_fd(12) };
 
-            let r1 = ops.add(async_read_into(&testfd, vec![]));
-            let r2 = ops.add(async_close(testfd));
+            let r1 = ops.add(async_read_into(&-1, vec![]));
+            let r2 = ops.add(async_close(-1));
 
             let succeeded = ops.await;
 
@@ -384,7 +381,7 @@ mod tests {
     #[test]
     fn local_read_timeout_test() {
         let result = async_run(async {
-            let testfd = unsafe { OwnedFd::from_raw_fd(0) };
+            let testfd = unsafe { OwnedFd::from_raw_fd(libc::dup(0)) };
             let mut buffer = Vec::new();
             buffer.resize(100, 0);
 
