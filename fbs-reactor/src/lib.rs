@@ -262,7 +262,7 @@ impl Reactor {
             parameters.timeout.tv_sec = timeout.as_secs() as i64;
             parameters.timeout.tv_nsec = timeout.subsec_nanos() as i64;
 
-            io_uring_prep_link_timeout(sqe.ptr, &mut parameters.timeout, flags);
+            io_uring_prep_link_timeout(sqe.ptr, &mut parameters.timeout, 0);
             io_uring_sqe_set_data64(sqe.ptr, CQE_IGNORE);
             io_uring_sqe_set_flags(sqe.ptr, flags);
         }
