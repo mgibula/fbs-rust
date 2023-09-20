@@ -396,4 +396,22 @@ mod tests {
         // ensure it actually executed
         assert_eq!(result, 1);
     }
+
+    #[test]
+    fn local_read_timeout_test_notimeout() {
+        let result = async_run(async {
+            let mut buffer = Vec::new();
+            buffer.resize(100, 0);
+
+            let data = async_read_into(&-1, buffer).timeout(Duration::new(0, 1_000_000));
+            let data = data.await;
+
+            assert!(data.is_err());
+            assert_eq!(data.err().unwrap().0.errno(), libc::EBADF);
+            1
+        });
+
+        // ensure it actually executed
+        assert_eq!(result, 1);
+    }
 }
