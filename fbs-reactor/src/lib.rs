@@ -16,6 +16,9 @@ pub enum ReactorError {
     NoSQEAvailable,
 }
 
+const CQE_CANCEL_CQE: u64 = u64::MAX;
+const CQE_TIMEOUT_CQE: u64 = u64::MAX - 1;
+
 pub type OpCompletion = Option<Box<dyn Fn(IoUringCQE, ReactorOpParameters)>>;
 
 pub struct IOUringReq {
@@ -40,7 +43,7 @@ impl IOUringOpType {
 }
 
 pub enum IOUringOp {
-    InProgress(),
+    InProgress((u64, usize)),
 
     Nop(),
     Close(i32),                         // fd
@@ -79,13 +82,15 @@ enum OpState {
 struct ReactorOp {
     state: OpState,
     parameters: ReactorOpParameters,
+    seq: u64,
 }
 
 impl ReactorOp {
-    fn new() -> Self {
+    fn new(seq: u64) -> Self {
         ReactorOp {
             state: OpState::Unscheduled(),
             parameters: ReactorOpParameters::default(),
+            seq,
         }
     }
 
@@ -100,8 +105,8 @@ struct ReactorOpPtr {
 }
 
 impl ReactorOpPtr {
-    pub fn new() -> Self {
-        ReactorOpPtr { ptr: Box::new(ReactorOp::new()) }
+    pub fn new(seq: u64) -> Self {
+        ReactorOpPtr { ptr: Box::new(ReactorOp::new(seq)) }
     }
 
     fn complete_op(&mut self, cqe: IoUringCQE, params: ReactorOpParameters) {
@@ -114,6 +119,10 @@ impl ReactorOpPtr {
     fn reset(&mut self) {
         self.ptr.reset()
     }
+
+    fn seq_number(&self) -> u64 {
+        self.ptr.seq
+    }
 }
 
 pub struct Reactor {
@@ -123,6 +132,7 @@ pub struct Reactor {
     in_flight: u32,
     uncommited: u32,
     rop_cache: Vec<ReactorOpPtr>,
+    seq: u64,
 }
 
 impl Reactor {
@@ -132,7 +142,7 @@ impl Reactor {
             cq_entries: 64,
         };
 
-        Ok(Reactor { ring: IoUring::new(params)?, ops: vec![], ops_free_entries: vec![], in_flight: 0, uncommited: 0, rop_cache: vec![] })
+        Ok(Reactor { ring: IoUring::new(params)?, ops: vec![], ops_free_entries: vec![], in_flight: 0, uncommited: 0, rop_cache: vec![], seq: 0 })
     }
 
     pub fn is_supported(&self, opcode: u32) -> bool {
@@ -152,9 +162,41 @@ impl Reactor {
     }
 
     fn get_rop(&mut self) -> ReactorOpPtr {
+        self.seq += 1;
         match self.rop_cache.pop() {
-            Some(rop) => rop,
-            None => ReactorOpPtr::new()
+            Some(mut rop) => { rop.ptr.seq = self.seq; rop },
+            None => ReactorOpPtr::new(self.seq)
+        }
+    }
+
+    pub fn cancel_op(&mut self, seq: u64, index: usize) {
+        if self.ops.len() <= index {
+            return;
+        }
+
+        let op = &self.ops[index];
+        let op = match op {
+            None => return,
+            Some(ptr) => ptr,
+        };
+
+        if op.ptr.seq != seq {
+            return;
+        }
+
+        self.enqueue_cancel(index);
+    }
+
+    fn enqueue_cancel(&mut self, index: usize) {
+        // Cancelled op may still be waiting for submission
+        self.submit().expect("Error on submit");
+
+        let sqe = self.get_sqe().expect("Can't get SQE from io_uring");
+
+        unsafe {
+            io_uring_prep_cancel64(sqe.ptr, index as u64, 0);
+            io_uring_sqe_set_data64(sqe.ptr, CQE_CANCEL_CQE);
+            io_uring_sqe_set_flags(sqe.ptr, 0); // IOSQE_CQE_SKIP_SUCCESS seems to be not supported by cancel op
         }
     }
 
@@ -170,7 +212,6 @@ impl Reactor {
         }
 
         self.in_flight += ops_count;
-        self.uncommited += ops_count;
 
         ops.into_iter().enumerate().for_each(|(op_index, req)| {
             let op_index = op_index as u32;
@@ -178,7 +219,7 @@ impl Reactor {
             let index = self.get_next_index();
 
             let mut rop = self.get_rop();
-            let requested = std::mem::replace(&mut req.op, IOUringOp::InProgress());
+            let requested = std::mem::replace(&mut req.op, IOUringOp::InProgress((rop.seq_number(), index)));
 
             unsafe {
                 let parameters = &mut rop.ptr.parameters;
@@ -222,7 +263,7 @@ impl Reactor {
 
                         io_uring_prep_timeout(sqe.ptr, &mut parameters.timeout, 0, 0);
                     },
-                    IOUringOp::InProgress() => panic!("op already scheduled"),
+                    IOUringOp::InProgress(_) => panic!("op already scheduled"),
                 }
 
                 rop.ptr.state = OpState::Scheduled(req.completion.take());
@@ -257,6 +298,7 @@ impl Reactor {
             parameters.timeout.tv_nsec = timeout.subsec_nanos() as i64;
 
             io_uring_prep_link_timeout(sqe.ptr, &mut parameters.timeout, 0);
+            io_uring_sqe_set_data64(sqe.ptr, CQE_TIMEOUT_CQE);
             io_uring_sqe_set_flags(sqe.ptr, flags);
         }
     }
@@ -271,7 +313,12 @@ impl Reactor {
     }
 
     fn get_sqe(&mut self) -> Result<IoUringSQEPtr, ReactorError> {
-        self.ring.get_sqe().ok_or_else(|| ReactorError::NoSQEAvailable)
+        let result = self.ring.get_sqe().ok_or_else(|| ReactorError::NoSQEAvailable);
+        if result.is_ok() {
+            self.uncommited += 1;
+        }
+
+        result
     }
 
     fn submit(&mut self) -> Result<i32, IoUringError> {
@@ -310,17 +357,24 @@ impl Reactor {
     }
 
     fn process_cqe(&mut self, cqe: IoUringCQEPtr) {
-        self.in_flight -= 1;
-
         let index = cqe.get_data64();
         let index = index as usize;
-        let mut rop = self.ops[index].take().expect("io_uring returned completed op with incorrect index");
 
-        self.ops_free_entries.push(index);
+        match index as u64 {
+            CQE_TIMEOUT_CQE => (),
+            CQE_CANCEL_CQE => (),
+            index => {
+                let index = index as usize;
+                let mut rop = self.ops[index].take().expect("io_uring returned completed op with incorrect index");
 
-        let params = std::mem::take(&mut rop.ptr.parameters);
-        rop.complete_op(cqe.copy_from(), params);
-        self.retire_rop(rop);
+                self.in_flight -= 1;
+                self.ops_free_entries.push(index);
+
+                let params = std::mem::take(&mut rop.ptr.parameters);
+                rop.complete_op(cqe.copy_from(), params);
+                self.retire_rop(rop);
+            },
+        }
 
         self.ring.cqe_seen(cqe);
     }

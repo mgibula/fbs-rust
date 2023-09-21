@@ -86,7 +86,42 @@ pub trait AsyncOpResult : Unpin {
     fn get_result(cqe: IoUringCQE, params: ReactorOpParameters) -> Self::Output;
 }
 
-pub struct AsyncOp<T: AsyncOpResult> (IOUringReq, Rc<Cell<Option<T::Output>>>);
+pub enum AsyncValue<T> {
+    InProgress,
+    Stored(T),
+    Completed,
+}
+
+impl<T> AsyncValue<T> {
+    pub fn as_option(self) -> Option<T> {
+        match self {
+            AsyncValue::Stored(value) => Some(value),
+            _ => None,
+        }
+    }
+}
+
+pub struct AsyncOp<T: AsyncOpResult> (IOUringReq, Rc<Cell<AsyncValue<T::Output>>>);
+
+impl<T: AsyncOpResult> Drop for AsyncOp<T> {
+    fn drop(&mut self) {
+        // short-circuit to check if op has already been completed
+        match self.1.replace(AsyncValue::Completed) {
+            AsyncValue::InProgress => (),
+            _ => return,
+        }
+
+        match self.0.op {
+            IOUringOp::InProgress(cancel) => {
+                REACTOR.with(|r| {
+                    r.borrow_mut().cancel_op(cancel.0, cancel.1);
+                });
+            },
+            _ => ()
+        }
+
+    }
+}
 
 impl<T: AsyncOpResult> AsyncOp<T> {
     fn new(op: IOUringOp) -> Self {
@@ -96,7 +131,7 @@ impl<T: AsyncOpResult> AsyncOp<T> {
             timeout: None,
         };
 
-        Self(req, Rc::new(Cell::new(None)))
+        Self(req, Rc::new(Cell::new(AsyncValue::InProgress)))
     }
 
     pub fn schedule(mut self, handler: impl Fn(T::Output) + 'static) {
@@ -125,10 +160,11 @@ impl<T: AsyncOpResult> Future for AsyncOp<T> {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         match &self.0.op {
-            IOUringOp::InProgress() => {
-                match self.1.take() {
-                    Some(value) => Poll::Ready(value),
-                    None => Poll::Pending,
+            IOUringOp::InProgress(_) => {
+                match self.1.replace(AsyncValue::InProgress) {
+                    AsyncValue::InProgress => Poll::Pending,
+                    AsyncValue::Stored(value) => { self.1.set(AsyncValue::Completed); Poll::Ready(value) },
+                    AsyncValue::Completed => panic!("Pooling completed op"),
                 }
             },
             _ => {
@@ -136,7 +172,7 @@ impl<T: AsyncOpResult> Future for AsyncOp<T> {
                 let result = self.1.clone();
 
                 self.0.completion = Some(Box::new(move |cqe, params| {
-                    result.set(Some(T::get_result(cqe, params)));
+                    result.set(AsyncValue::Stored(T::get_result(cqe, params)));
                     waker.wake_by_ref();
                 }));
 
@@ -371,7 +407,6 @@ mod tests {
         });
 
         let elapsed = now.elapsed();
-
         assert!(elapsed.is_ok_and(|e| e.as_nanos() >= 1_000_000));
 
         // ensure it actually executed
@@ -408,6 +443,29 @@ mod tests {
 
             assert!(data.is_err());
             assert_eq!(data.err().unwrap().0.errno(), libc::EBADF);
+            1
+        });
+
+        // ensure it actually executed
+        assert_eq!(result, 1);
+    }
+
+    #[test]
+    fn local_cancel() {
+        use std::time::{Duration, SystemTime};
+
+        let result = async_run(async {
+            let handle1 = async_spawn(async {
+                async_sleep(Duration::new(4, 0)).await;
+            });
+
+            async_sleep(Duration::new(0, 1_000_000)).await;
+            let now = SystemTime::now();
+
+            handle1.cancel();
+            let elapsed = now.elapsed();
+            assert!(elapsed.is_ok_and(|e| e.as_secs() < 1));
+
             1
         });
 

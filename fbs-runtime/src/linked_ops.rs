@@ -3,7 +3,9 @@ use super::AsyncOp;
 use super::IOUringReq;
 use super::IOUringOp;
 use super::IoUringCQE;
+use super::AsyncValue;
 
+use std::mem::ManuallyDrop;
 use std::task::{Context, Poll};
 use std::pin::Pin;
 use std::future::Future;
@@ -18,7 +20,7 @@ pub struct AsyncLinkedOps {
 }
 
 pub struct DelayedResult<T> {
-    value: Rc<Cell<Option<T>>>,
+    value: Rc<Cell<AsyncValue<T>>>,
 }
 
 impl<T> Clone for DelayedResult<T> {
@@ -28,14 +30,14 @@ impl<T> Clone for DelayedResult<T> {
 }
 
 impl<T> DelayedResult<T> {
-    pub fn new(ptr: Rc<Cell<Option<T>>>) -> Self {
+    pub fn new(ptr: Rc<Cell<AsyncValue<T>>>) -> Self {
         Self {
             value: ptr
         }
     }
 
     pub fn value(self) -> T {
-        self.value.replace(None).unwrap()
+        self.value.replace(AsyncValue::Completed).as_option().unwrap()
     }
 }
 
@@ -45,11 +47,14 @@ impl AsyncLinkedOps {
     }
 
     pub fn add<T: AsyncOpResult>(&mut self, op: AsyncOp<T>) -> DelayedResult<T::Output> {
-        let AsyncOp::<T>(mut op_req, result_ptr) = op;
+        // AsyncOp has a custom Drop trait, so unsafe is needed for destructurization
+        let op = ManuallyDrop::new(op);
+        let (mut op_req, result_ptr) = unsafe { (std::ptr::read(&op.0), std::ptr::read(&op.1)) };
+
         let result = DelayedResult::new(result_ptr.clone());
 
         op_req.completion = Some(Box::new(move |cqe, params| {
-            result_ptr.set(Some(T::get_result(cqe, params)));
+            result_ptr.set(AsyncValue::Stored(T::get_result(cqe, params)));
         }));
 
         self.ops.push(op_req);
@@ -70,7 +75,7 @@ impl Future for AsyncLinkedOps {
         };
 
         match &last_op.op {
-            IOUringOp::InProgress() => {
+            IOUringOp::InProgress(_) => {
                 match last_result.get() {
                     Some(cqe)   => { return Poll::Ready(cqe.result >= 0) },
                     None                    => { return Poll::Pending },
