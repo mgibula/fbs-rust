@@ -32,9 +32,8 @@ pub struct ExecutorFrontend {
 
 pub struct TaskData {
     channel: ChannelTx<ExecutorCmd>,
-    future: Pin<Box<dyn Future<Output = ()>>>,
+    future: Option<Pin<Box<dyn Future<Output = ()>>>>,
     wait_index: Option<usize>,
-    completed: bool,
     waiters: Vec<Waker>,
 }
 

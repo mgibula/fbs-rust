@@ -70,28 +70,30 @@ impl Executor {
     }
 
     fn process_task(&mut self, task: Rc<RefCell<TaskData>>) {
-        if task.borrow().completed {
-            return;
-        }
-
-        let waker = super::task_data::task_into_waker(Rc::into_raw(task.clone()));
-        let mut context = Context::from_waker(&waker);
-
         let mut task_data = task.borrow_mut();
-        match task_data.future.as_mut().poll(&mut context) {
-            Poll::Pending => {
-                let index = self.waiting.allocate();
-                task_data.wait_index = Some(index);
+        match task_data.future {
+            None => return,
+            Some(ref mut future) => {
+                let waker = super::task_data::task_into_waker(Rc::into_raw(task.clone()));
+                let mut context = Context::from_waker(&waker);
 
-                drop(task_data);
-                self.waiting.insert_at(index, task);
-            },
-            Poll::Ready(()) => {
-                task_data.completed = true;
-                task_data.waiters.iter().for_each(|w| w.wake_by_ref());
-                task_data.waiters.clear();
-            },
+                match future.as_mut().poll(&mut context) {
+                    Poll::Pending => {
+                        let index = self.waiting.allocate();
+                        task_data.wait_index = Some(index);
+
+                        drop(task_data);
+                        self.waiting.insert_at(index, task);
+                    },
+                    Poll::Ready(()) => {
+                        task_data.future = None;
+                        task_data.waiters.iter().for_each(|w| w.wake_by_ref());
+                        task_data.waiters.clear();
+                    },
+                }
+            }
         }
+
     }
 
 }

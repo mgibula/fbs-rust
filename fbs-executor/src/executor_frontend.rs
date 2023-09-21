@@ -20,9 +20,8 @@ impl ExecutorFrontend {
 
         let task = Rc::new(RefCell::new(TaskData {
             channel: self.channel.clone(),
-            future,
+            future: Some(future),
             wait_index: None,
-            completed: false,
             waiters: vec![],
         }));
 
