@@ -52,8 +52,10 @@ pub enum IoUringError {
     TryAgain,
     #[error("invalid arguments specified")]
     InvalidArguments,
-    #[error("system call error")]
+    #[error("sqe submit error")]
     SubmitError(SystemError),
+    #[error("cqe wait error")]
+    WaitError(SystemError),
 }
 
 impl Drop for IoUring {
@@ -124,9 +126,7 @@ impl IoUring {
         unsafe {
             let ptr = io_uring_get_sqe(&mut self.ring);
             if !ptr.is_null() {
-                return Some(IoUringSQEPtr {
-                    ptr,
-                });
+                return Some(IoUringSQEPtr { ptr });
             }
 
             return None;
@@ -150,17 +150,8 @@ impl IoUring {
             let errno = io_uring_wait_cqe(&mut self.ring, &mut ptr);
             match -errno {
                 0 => Ok(IoUringCQEPtr { cqe: ptr }),
-                libc::EAGAIN => return Err(IoUringError::TryAgain),
-                libc::EBUSY => return Err(IoUringError::TryAgain),
-                libc::EINTR => return Err(IoUringError::TryAgain),
-                libc::EBADF => return Err(IoUringError::InvalidArguments),
-                libc::EBADFD => return Err(IoUringError::InvalidArguments),
-                libc::EINVAL => return Err(IoUringError::InvalidArguments),
-                libc::EFAULT => return Err(IoUringError::InvalidArguments),
-                libc::EBADR => panic!("CQE were dropped by kernel due to low memory condition"),
-                libc::ENXIO => return Err(IoUringError::InvalidArguments),
-                libc::EOPNOTSUPP => return Err(IoUringError::InvalidArguments),
-                _ => panic!("Unexpected error: {}", errno),
+                libc::EAGAIN | libc::EBUSY | libc::EINTR => return Err(IoUringError::TryAgain),
+                _ => return Err(IoUringError::WaitError(SystemError::new(errno))),
             }
         }
     }
