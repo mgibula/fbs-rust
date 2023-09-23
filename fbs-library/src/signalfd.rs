@@ -67,12 +67,8 @@ impl SignalFd {
     }
 
     pub fn set_signal_mask(&mut self, mask: &SignalSet) -> Result<(), SystemError> {
-        let mut flags = SignalFdFlags::new();
-        flags.non_blocking(self.non_blocking());
-        flags.close_on_exec(self.close_on_exec());
-
         unsafe {
-            let fd = libc::signalfd(self.fd.as_raw_fd(), mask.as_ptr(), flags.flags());
+            let fd = libc::signalfd(self.fd.as_raw_fd(), mask.as_ptr(), 0);
             match fd {
                 -1 => Err(SystemError::new_from_errno()),
                 _ => Ok(())
