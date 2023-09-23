@@ -1,3 +1,4 @@
+use std::mem::MaybeUninit;
 use std::os::fd::{OwnedFd, FromRawFd, AsRawFd, IntoRawFd, RawFd};
 use super::sigset::{SignalSet, Signal};
 use super::system_error::SystemError;
@@ -7,6 +8,10 @@ use super::system_error::SystemError;
 pub struct SignalFdInfo(libc::signalfd_siginfo);
 
 impl SignalFdInfo {
+    pub fn new() -> Self {
+        Self{0: unsafe { MaybeUninit::zeroed().assume_init() }}
+    }
+
     pub fn signal(&self) -> Signal {
         unsafe { std::mem::transmute(self.0.ssi_signo as i32) }
     }
