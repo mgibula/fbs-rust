@@ -169,28 +169,36 @@ impl Reactor {
         }
     }
 
-    pub fn cancel_op(&mut self, seq: u64, index: usize) {
-        if self.ops.len() <= index {
-            return;
-        }
-
-        let op = &self.ops[index];
-        let op = match op {
-            None => return,
-            Some(ptr) => ptr,
-        };
-
-        if op.ptr.seq != seq {
-            return;
-        }
-
-        self.enqueue_cancel(index);
-    }
-
-    fn enqueue_cancel(&mut self, index: usize) {
+    pub fn cancel_op(&mut self, cancel_tags: &[(u64, usize)]) {
         // Cancelled op may still be waiting for submission
         self.submit().expect("Error on submit");
 
+        cancel_tags.into_iter().for_each(|(seq, index)| {
+            let seq = *seq;
+            let index = *index;
+
+            if self.ops.len() <= index {
+                return;
+            }
+
+            let op = &self.ops[index];
+            let op = match op {
+                None => return,
+                Some(ptr) => ptr,
+            };
+
+            if op.ptr.seq != seq {
+                return;
+            }
+
+            self.enqueue_cancel(index);
+        });
+
+        // Fire up cancellations immediately
+        self.submit().expect("Error on submit");
+    }
+
+    fn enqueue_cancel(&mut self, index: usize) {
         let sqe = self.get_sqe().expect("Can't get SQE from io_uring");
 
         unsafe {
@@ -200,7 +208,7 @@ impl Reactor {
         }
     }
 
-    pub fn schedule_linked2(&mut self, ops: &mut [IOUringReq]) {
+    pub fn schedule_linked2(&mut self, ops: &mut [&mut IOUringReq]) {
         let ops_count = ops.len() as u32;
 
         if self.ring.sq_space_left() < ops_count {

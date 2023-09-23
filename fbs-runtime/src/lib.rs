@@ -114,7 +114,7 @@ impl<T: AsyncOpResult> Drop for AsyncOp<T> {
         match self.0.op {
             IOUringOp::InProgress(cancel) => {
                 REACTOR.with(|r| {
-                    r.borrow_mut().cancel_op(cancel.0, cancel.1);
+                    r.borrow_mut().cancel_op(slice::from_ref(&(cancel.0, cancel.1)));
                 });
             },
             _ => ()
@@ -140,7 +140,7 @@ impl<T: AsyncOpResult> AsyncOp<T> {
         }));
 
         REACTOR.with(|r| {
-            r.borrow_mut().schedule_linked2(slice::from_mut(&mut self.0))
+            r.borrow_mut().schedule_linked2(slice::from_mut(&mut &mut self.0))
         });
     }
 
@@ -177,7 +177,7 @@ impl<T: AsyncOpResult> Future for AsyncOp<T> {
                 }));
 
                 REACTOR.with(|r| {
-                    r.borrow_mut().schedule_linked2(slice::from_mut(&mut self.0))
+                    r.borrow_mut().schedule_linked2(slice::from_mut(&mut &mut self.0))
                 });
 
                 Poll::Pending
@@ -459,8 +459,8 @@ mod tests {
                 async_sleep(Duration::new(4, 0)).await;
             });
 
-            async_sleep(Duration::new(0, 1_000_000)).await;
             let now = SystemTime::now();
+            async_sleep(Duration::new(0, 1_000_000)).await;
 
             handle1.cancel();
             let elapsed = now.elapsed();
@@ -472,4 +472,72 @@ mod tests {
         // ensure it actually executed
         assert_eq!(result, 1);
     }
+
+    #[test]
+    fn local_linked_cancel_test() {
+        use std::time::{Duration, SystemTime};
+
+        // cancelling first op
+        let result = async_run(async {
+            let handle1 = async_spawn(async {
+                let testfd = unsafe { OwnedFd::from_raw_fd(libc::dup(0)) };
+                let mut buffer = Vec::new();
+                buffer.resize(100, 0);
+
+                let mut ops = AsyncLinkedOps::new();
+
+                ops.add(async_read_into(&testfd, buffer));
+                ops.add(async_sleep(Duration::new(5, 0)));
+
+                ops.await;
+            });
+
+            let now = SystemTime::now();
+            async_sleep(Duration::new(0, 1_000_000)).await;
+
+            handle1.cancel();
+            let elapsed = now.elapsed();
+            assert!(elapsed.is_ok_and(|e| e.as_secs() < 1));
+
+            1
+        });
+
+        // ensure it actually executed
+        assert_eq!(result, 1);
+    }
+
+    #[test]
+    fn local_linked_cancel_test2() {
+        use std::time::{Duration, SystemTime};
+
+        // cancelling second op
+        let result = async_run(async {
+            let handle1 = async_spawn(async {
+                let testfd = unsafe { OwnedFd::from_raw_fd(libc::dup(0)) };
+                let mut buffer = Vec::new();
+                buffer.resize(100, 0);
+
+                let mut ops = AsyncLinkedOps::new();
+
+                ops.add(async_close(testfd));
+                ops.add(async_sleep(Duration::new(5, 0)));
+
+                ops.await;
+            });
+
+            let now = SystemTime::now();
+            async_sleep(Duration::new(0, 1_000_000)).await;
+
+            handle1.cancel();
+            let elapsed = now.elapsed();
+            assert!(elapsed.is_ok_and(|e| e.as_secs() < 1));
+
+            1
+        });
+
+        // ensure it actually executed
+        assert_eq!(result, 1);
+    }
+
+
 }

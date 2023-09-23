@@ -15,8 +15,7 @@ use std::rc::Rc;
 use super::REACTOR;
 
 pub struct AsyncLinkedOps {
-    ops: Vec<IOUringReq>,
-    last_result: Rc<Cell<Option<IoUringCQE>>>,
+    ops: Vec<(IOUringReq, Rc<Cell<Option<IoUringCQE>>>)>,
 }
 
 pub struct DelayedResult<T> {
@@ -43,7 +42,7 @@ impl<T> DelayedResult<T> {
 
 impl AsyncLinkedOps {
     pub fn new() -> Self {
-        AsyncLinkedOps { ops: vec![], last_result: Rc::new(Cell::new(None)) }
+        AsyncLinkedOps { ops: vec![] }
     }
 
     pub fn add<T: AsyncOpResult>(&mut self, op: AsyncOp<T>) -> DelayedResult<T::Output> {
@@ -52,12 +51,15 @@ impl AsyncLinkedOps {
         let (mut op_req, result_ptr) = unsafe { (std::ptr::read(&op.0), std::ptr::read(&op.1)) };
 
         let result = DelayedResult::new(result_ptr.clone());
+        let result_generic = Rc::new(Cell::new(None));
+        let result_generic_inner = result_generic.clone();
 
         op_req.completion = Some(Box::new(move |cqe, params| {
+            result_generic_inner.set(Some(cqe));
             result_ptr.set(AsyncValue::Stored(T::get_result(cqe, params)));
         }));
 
-        self.ops.push(op_req);
+        self.ops.push((op_req, result_generic));
         result
     }
 }
@@ -66,39 +68,52 @@ impl Future for AsyncLinkedOps {
     type Output = bool;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let last_result = self.last_result.clone();
-
         // return immediately if there are no ops
         let last_op = match self.ops.last_mut() {
             None                         => return Poll::Ready(true),
             Some(op)    => op,
         };
 
-        match &last_op.op {
-            IOUringOp::InProgress(_) => {
-                match last_result.get() {
-                    Some(cqe)   => { return Poll::Ready(cqe.result >= 0) },
-                    None                    => { return Poll::Pending },
-                }
-            },
-            _ => { /* handled below */ }
+        match (&last_op.0.op, last_op.1.get()) {
+            (IOUringOp::InProgress(_), Some(cqe))   => { return Poll::Ready(cqe.result >= 0) },
+            (IOUringOp::InProgress(_), None)                    => { return Poll::Pending },
+            (_, _) => (),   /* handled below */
         }
 
-        let prev_cb = last_op.completion.take();
+        let prev_cb = last_op.0.completion.take();
         let waker = cx.waker().clone();
-        last_op.completion = Some(Box::new(move |cqe, params| {
+        last_op.0.completion = Some(Box::new(move |cqe, params| {
             if let Some(cb) = &prev_cb {
                 cb(cqe, params);
             }
 
-            last_result.set(Some(cqe));
             waker.wake_by_ref();
         }));
 
+        let mut ops = self.ops.iter_mut().map(|e| {
+            &mut e.0
+        }).collect::<Vec<_>>();
+
         REACTOR.with(|r| {
-            r.borrow_mut().schedule_linked2(&mut self.ops)
+            r.borrow_mut().schedule_linked2(&mut ops);
         });
 
         Poll::Pending
+    }
+}
+
+impl Drop for AsyncLinkedOps {
+    fn drop(&mut self) {
+
+        let cancel_tags = self.ops.iter().filter_map(|e| {
+            match (&e.0.op, e.1.get()) {
+                (IOUringOp::InProgress(cancel), None) => Some(*cancel),
+                (_, _) => None,
+            }
+        }).collect::<Vec<_>>();
+
+        REACTOR.with(|r| {
+            r.borrow_mut().cancel_op(&cancel_tags);
+        });
     }
 }
