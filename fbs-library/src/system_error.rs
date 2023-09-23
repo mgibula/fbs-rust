@@ -27,6 +27,10 @@ impl SystemError {
         Self{0: std::io::Error::from_raw_os_error(code)}
     }
 
+    pub fn new_from_errno() -> Self {
+        Self{0: std::io::Error::last_os_error()}
+    }
+
     #[inline]
     pub fn cancelled(&self) -> bool {
         match self.0.raw_os_error() {
