@@ -72,7 +72,7 @@ impl SignalFd {
         flags.close_on_exec(self.close_on_exec());
 
         unsafe {
-            let fd = libc::signalfd(-1, mask.as_ptr(), flags.flags());
+            let fd = libc::signalfd(self.fd.as_raw_fd(), mask.as_ptr(), flags.flags());
             match fd {
                 -1 => Err(SystemError::new_from_errno()),
                 _ => Ok(())
