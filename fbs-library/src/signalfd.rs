@@ -1,6 +1,16 @@
 use std::os::fd::{OwnedFd, FromRawFd, AsRawFd, IntoRawFd, RawFd};
-use super::sigset::SignalSet;
+use super::sigset::{SignalSet, Signal};
 use super::system_error::SystemError;
+
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+pub struct SignalFdInfo(libc::signalfd_siginfo);
+
+impl SignalFdInfo {
+    pub fn signal(&self) -> Signal {
+        unsafe { std::mem::transmute(self.0.ssi_signo as i32) }
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct SignalFdFlags {
