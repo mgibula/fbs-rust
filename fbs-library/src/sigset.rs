@@ -92,6 +92,10 @@ impl SignalSet {
             }
         }
     }
+
+    pub fn as_ptr(&self) -> *const libc::sigset_t {
+        &self.sigset
+    }
 }
 
 #[cfg(test)]
