@@ -84,6 +84,16 @@ impl Buffer {
         }
     }
 
+    pub fn new_struct<T: Copy>() -> Self {
+        let layout = Layout::new::<T>();
+        Self {
+            ptr: unsafe { std::alloc::alloc_zeroed(layout) },
+            size: std::mem::size_of::<T>(),
+            capacity: std::mem::size_of::<T>(),
+            layout,
+        }
+    }
+
     pub fn from_vec<T: Copy>(buffer: Vec<T>) -> Self {
         let mut buffer = ManuallyDrop::new(buffer);
 
@@ -95,7 +105,14 @@ impl Buffer {
         }
     }
 
-    pub unsafe fn to_vec<T: Copy>(&mut self, size: usize) -> Vec<T> {
+    pub unsafe fn to_struct<T: Copy>(self, bytes: usize) -> T {
+        assert!(bytes == std::mem::size_of::<T>());
+        unsafe { std::ptr::read(self.ptr as *mut T) }
+
+        // self.ptr is still set, so destructor will clear it
+    }
+
+    pub unsafe fn to_vec<T: Copy>(mut self, bytes: usize) -> Vec<T> {
         if !self.is_valid() {
             return Vec::new();
         }
@@ -103,11 +120,10 @@ impl Buffer {
         assert!(self.size % std::mem::size_of::<T>() == 0);
         assert!(self.capacity % std::mem::size_of::<T>() == 0);
 
-        let result = unsafe { Vec::from_raw_parts(self.ptr as *mut T, size / std::mem::size_of::<T>(), self.capacity / std::mem::size_of::<T>()) };
-        self.ptr = std::ptr::null_mut();
-        self.size = 0;
-        self.capacity = 0;
+        let result = unsafe { Vec::from_raw_parts(self.ptr as *mut T, bytes / std::mem::size_of::<T>(), self.capacity / std::mem::size_of::<T>()) };
 
+        // self.ptr is still set but ownership is transfered to return value, so need to clear it to avoid double free in a destructor
+        self.ptr = std::ptr::null_mut();
         result
     }
 }

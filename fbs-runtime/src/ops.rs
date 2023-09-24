@@ -1,3 +1,4 @@
+use std::marker::PhantomData;
 use std::os::fd::{OwnedFd, FromRawFd, IntoRawFd, AsRawFd};
 use std::os::unix::prelude::OsStrExt;
 use std::path::Path;
@@ -111,7 +112,7 @@ impl AsyncOpResult for ResultBuffer {
     type Output = Result<Vec<u8>, (SystemError, Vec<u8>)>;
 
     fn get_result(cqe: IoUringCQE, params: ReactorOpParameters) -> Self::Output {
-        let mut buffer = params.buffer;
+        let buffer = params.buffer;
 
         let result = if cqe.result >= 0 {
             let buffer = unsafe { buffer.to_vec(cqe.result as usize) };
@@ -125,11 +126,34 @@ impl AsyncOpResult for ResultBuffer {
     }
 }
 
+pub struct ResultStruct<T: Copy + Unpin> {
+    data: PhantomData<T>,
+}
+
+impl<T: Copy + Unpin + 'static> AsyncOpResult for ResultStruct<T> {
+    type Output = Result<T, SystemError>;
+
+    fn get_result(cqe: IoUringCQE, params: ReactorOpParameters) -> Self::Output {
+        let buffer = params.buffer;
+
+        let result = if cqe.result == std::mem::size_of::<T>() as i32 {
+            Ok(unsafe { buffer.to_struct::<T>(cqe.result as usize) })
+        } else if cqe.result > 0 {
+            Err(SystemError::new(libc::ENOENT))
+        } else {
+            Err(SystemError::new(-cqe.result))
+        };
+
+        result
+    }
+}
+
 pub type AsyncNop = AsyncOp::<ResultErrno>;
 pub type AsyncClose = AsyncOp::<ResultErrno>;
 pub type AsyncOpen = AsyncOp::<ResultDescriptor>;
 pub type AsyncSocket = AsyncOp::<ResultErrno>;
-pub type AsyncRead = AsyncOp::<ResultBuffer>;
+pub type AsyncReadBytes = AsyncOp::<ResultBuffer>;
+pub type AsyncReadStruct<T> = AsyncOp::<ResultStruct<T>>;
 pub type AsyncWrite = AsyncOp::<ResultBuffer>;
 pub type AsyncAccept = AsyncOp::<ResultSocket>;
 pub type AsyncConnect = AsyncOp::<ResultErrno>;
@@ -152,8 +176,12 @@ pub fn async_socket(domain: SocketDomain, socket_type: SocketType, options: i32)
     AsyncOp::new(IOUringOp::Socket(domain as i32, socket_type as i32 | options, 0))
 }
 
-pub fn async_read_into<T: AsRawFd>(fd: &T, buffer: Vec<u8>, offset: Option<u64>) -> AsyncRead {
+pub fn async_read_into<T: AsRawFd>(fd: &T, buffer: Vec<u8>, offset: Option<u64>) -> AsyncReadBytes {
     AsyncOp::new(IOUringOp::Read(fd.as_raw_fd(), Buffer::from_vec(buffer), offset))
+}
+
+pub fn async_read_struct<U: Copy + Unpin + 'static>(fd: &impl AsRawFd, offset: Option<u64>) -> AsyncReadStruct<U> {
+    AsyncOp::new(IOUringOp::Read(fd.as_raw_fd(), Buffer::new_struct::<U>(), offset))
 }
 
 pub fn async_write<T: AsRawFd>(fd: &T, buffer: Vec<u8>, offset: Option<u64>) -> AsyncWrite {

@@ -202,7 +202,7 @@ fn async_run_all() {
 
 #[cfg(test)]
 mod tests {
-    use std::{os::fd::{OwnedFd, FromRawFd}, io::Read};
+    use std::os::fd::{OwnedFd, FromRawFd};
 
     use super::*;
 
@@ -265,9 +265,12 @@ mod tests {
         assert_eq!(result, 1);
     }
 
-
     #[test]
     fn local_openat2_and_write_test() {
+        #[repr(C, packed)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        struct TestStruct(u8, u8, u8, u8);
+
         let result = async_run(async {
             let result = async_open("/tmp/testowy-uring.txt", OpenMode::new().create(true, 0o777)).await;
             assert!(result.is_ok());
@@ -286,6 +289,10 @@ mod tests {
             assert_eq!(read_content.len(), 4);
             assert_eq!(read_content.capacity(), 10);
             assert_eq!(read_content, vec![116, 101, 115, 116]);
+
+            let result = async_read_struct::<TestStruct>(fd, Some(0)).await;
+            assert!(result.is_ok());
+            assert_eq!(result.unwrap(), TestStruct { 0: 116, 1: 101, 2: 115, 3: 116});
             1
         });
 
