@@ -1,7 +1,9 @@
 use std::mem::MaybeUninit;
+use super::system_error::SystemError;
 
 #[repr(i32)]
 #[non_exhaustive]
+#[derive(Debug)]
 pub enum Signal {
     SIGHUP          = libc::SIGHUP,
     SIGINT          = libc::SIGINT,
@@ -95,6 +97,28 @@ impl SignalSet {
 
     pub fn as_ptr(&self) -> *const libc::sigset_t {
         &self.sigset
+    }
+}
+
+pub enum SignalMask {
+    Block,
+    Unblock,
+    Set,
+}
+
+pub fn set_process_signal_mask(what: SignalMask, mask: SignalSet) -> Result<(), SystemError> {
+    let what = match what  {
+        SignalMask::Block => libc::SIG_BLOCK,
+        SignalMask::Unblock => libc::SIG_UNBLOCK,
+        SignalMask::Set => libc::SIG_SETMASK,
+    };
+
+    unsafe {
+        let error = libc::sigprocmask(what, mask.as_ptr(), std::ptr::null_mut());
+        match error {
+            0 => Ok(()),
+            _ => Err(SystemError::new_from_errno())
+        }
     }
 }
 
