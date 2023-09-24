@@ -1,6 +1,11 @@
+use fbs_library::signalfd::SignalFd;
+use fbs_library::signalfd::SignalFdFlags;
+use fbs_library::signalfd::SignalFdInfo;
+use fbs_library::sigset::{SignalSet, SignalMask, set_process_signal_mask};
 use fbs_runtime::*;
 use fbs_library::socket_address::*;
 use fbs_library::socket::*;
+use fbs_library::sigset::Signal;
 
 async fn try_connect()
 {
@@ -51,6 +56,28 @@ fn main() {
     println!("Hello, world!");
 
     async_run(async {
+
+        async_spawn(async {
+            let mut mask = SignalSet::empty();
+            mask.add(Signal::SIGINT);
+            mask.add(Signal::SIGHUP);
+            mask.add(Signal::SIGCHLD);
+
+            set_process_signal_mask(SignalMask::Block, mask).unwrap();
+
+            let sigfd = SignalFd::new(mask, SignalFdFlags::new().close_on_exec(true).flags()).unwrap();
+
+            loop {
+                let received = async_read_struct::<SignalFdInfo>(&sigfd, None).await;
+                match received {
+                    Err(error) => panic!("Got error {}", error),
+                    Ok(info) => {
+                        println!("Got {:?}", info.signal());
+                    }
+                }
+            }
+        });
+
         let server_address = SocketIpAddress::from_text("0.0.0.0:2404").unwrap();
         let mut socket = Socket::new(SocketDomain::Inet, SocketType::Stream, SocketFlags::new().flags());
 
