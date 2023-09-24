@@ -12,6 +12,7 @@ use super::SocketType;
 use super::AsyncOpResult;
 use super::IoUringCQE;
 use super::ReactorOpParameters;
+use super::Buffer;
 
 use fbs_library::system_error::SystemError;
 use fbs_library::socket::Socket;
@@ -111,10 +112,12 @@ impl AsyncOpResult for ResultBuffer {
 
     fn get_result(cqe: IoUringCQE, params: ReactorOpParameters) -> Self::Output {
         let mut buffer = params.buffer;
+
         let result = if cqe.result >= 0 {
-            buffer.resize(cqe.result as usize, 0);
+            let buffer = unsafe { buffer.to_vec(cqe.result as usize) };
             Ok(buffer)
         } else {
+            let buffer = unsafe { buffer.to_vec(0) };
             Err((SystemError::new(-cqe.result), buffer))
         };
 
@@ -149,12 +152,12 @@ pub fn async_socket(domain: SocketDomain, socket_type: SocketType, options: i32)
     AsyncOp::new(IOUringOp::Socket(domain as i32, socket_type as i32 | options, 0))
 }
 
-pub fn async_read_into<T: AsRawFd>(fd: &T, buffer: Vec<u8>) -> AsyncRead {
-    AsyncOp::new(IOUringOp::Read(fd.as_raw_fd(), buffer, None))
+pub fn async_read_into<T: AsRawFd>(fd: &T, buffer: Vec<u8>, offset: Option<u64>) -> AsyncRead {
+    AsyncOp::new(IOUringOp::Read(fd.as_raw_fd(), Buffer::from_vec(buffer), offset))
 }
 
-pub fn async_write<T: AsRawFd>(fd: &T, buffer: Vec<u8>) -> AsyncWrite {
-    AsyncOp::new(IOUringOp::Write(fd.as_raw_fd(), buffer, None))
+pub fn async_write<T: AsRawFd>(fd: &T, buffer: Vec<u8>, offset: Option<u64>) -> AsyncWrite {
+    AsyncOp::new(IOUringOp::Write(fd.as_raw_fd(), Buffer::from_vec(buffer), offset))
 }
 
 pub fn async_accept<T: AsRawFd>(fd: &T, flags: i32) -> AsyncAccept {

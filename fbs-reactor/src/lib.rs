@@ -1,5 +1,6 @@
-use std::ffi::CString;
+use std::{ffi::CString, mem::ManuallyDrop};
 use std::time::Duration;
+use std::alloc::Layout;
 
 use liburing_sys::*;
 use io_uring::*;
@@ -42,14 +43,99 @@ impl IOUringOpType {
     pub const TIMEOUT: u32 = io_uring_op_IORING_OP_TIMEOUT;
 }
 
+pub struct Buffer {
+    ptr: *mut u8,
+    size: usize,
+    capacity: usize,
+    layout: Layout,
+}
+
+impl Buffer {
+    fn is_valid(&self) -> bool {
+        !self.ptr.is_null()
+    }
+
+    fn as_mut_ptr(&mut self) -> *mut u8 {
+        self.ptr
+    }
+
+    fn as_ptr(&self) -> *const u8 {
+        self.ptr
+    }
+
+    fn size(&self) -> usize {
+        self.size
+    }
+
+    fn capacity(&self) -> usize {
+        self.capacity
+    }
+
+    fn clear(&mut self) {
+        unsafe {
+            if !self.ptr.is_null() {
+                std::alloc::dealloc(self.ptr, self.layout)
+            }
+
+            self.ptr = std::ptr::null_mut();
+            self.size = 0;
+            self.capacity = 0;
+            self.layout = Layout::new::<u8>();
+        }
+    }
+
+    pub fn from_vec<T: Copy>(buffer: Vec<T>) -> Self {
+        let mut buffer = ManuallyDrop::new(buffer);
+
+        Self {
+            ptr: buffer.as_mut_ptr() as *mut u8,
+            size: buffer.len() * std::mem::size_of::<T>(),
+            capacity: buffer.capacity() * std::mem::size_of::<T>(),
+            layout: Layout::new::<T>(),
+        }
+    }
+
+    pub unsafe fn to_vec<T: Copy>(&mut self, size: usize) -> Vec<T> {
+        if !self.is_valid() {
+            return Vec::new();
+        }
+
+        assert!(self.size % std::mem::size_of::<T>() == 0);
+        assert!(self.capacity % std::mem::size_of::<T>() == 0);
+
+        let result = unsafe { Vec::from_raw_parts(self.ptr as *mut T, size / std::mem::size_of::<T>(), self.capacity / std::mem::size_of::<T>()) };
+        self.ptr = std::ptr::null_mut();
+        self.size = 0;
+        self.capacity = 0;
+
+        result
+    }
+}
+
+impl Drop for Buffer {
+    fn drop(&mut self) {
+        unsafe {
+            if !self.ptr.is_null() {
+                std::alloc::dealloc(self.ptr, self.layout)
+            }
+        }
+    }
+}
+
+impl Default for Buffer {
+    fn default() -> Self {
+        Self { ptr: std::ptr::null_mut(), size: 0, capacity: 0, layout: Layout::new::<u8>() }
+    }
+}
+
 pub enum IOUringOp {
     InProgress((u64, usize)),
 
     Nop(),
     Close(i32),                         // fd
     Open(CString, i32, u32),            // path, flags, mode
-    Read(i32, Vec<u8>, Option<u64>),    // fd, buffer, offset
-    Write(i32, Vec<u8>, Option<u64>),   // fd, buffer, offset
+    Read(i32, Buffer, Option<u64>),    // fd, buffer, offset
+    Write(i32, Buffer, Option<u64>),   // fd, buffer, offset
     Socket(i32, i32, i32),
     Accept(i32, i32),
     Connect(i32, SocketIpAddress),
@@ -61,7 +147,7 @@ pub struct ReactorOpParameters {
     timeout: __kernel_timespec,
     path: CString,
     address: SocketAddressBinary,
-    pub buffer: Vec<u8>,
+    pub buffer: Buffer,
 }
 
 impl ReactorOpParameters {
@@ -246,12 +332,12 @@ impl Reactor {
                     IOUringOp::Read(fd, buffer, offset) => {
                         parameters.buffer = buffer;
 
-                        io_uring_prep_read(sqe.ptr, fd, parameters.buffer.as_mut_ptr() as *mut libc::c_void, parameters.buffer.len() as u32, offset.unwrap_or(u64::MAX));
+                        io_uring_prep_read(sqe.ptr, fd, parameters.buffer.as_mut_ptr() as *mut libc::c_void, parameters.buffer.capacity() as u32, offset.unwrap_or(u64::MAX));
                     },
                     IOUringOp::Write(fd, buffer, offset) => {
                         parameters.buffer = buffer;
 
-                        io_uring_prep_write(sqe.ptr, fd, parameters.buffer.as_ptr() as *mut libc::c_void, parameters.buffer.len() as u32, offset.unwrap_or(u64::MAX));
+                        io_uring_prep_write(sqe.ptr, fd, parameters.buffer.as_ptr() as *mut libc::c_void, parameters.buffer.size() as u32, offset.unwrap_or(u64::MAX));
                     },
                     IOUringOp::Socket(domain, socket_type, protocol) => {
                         io_uring_prep_socket(sqe.ptr, domain, socket_type, protocol, 0);

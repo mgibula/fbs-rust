@@ -202,7 +202,7 @@ fn async_run_all() {
 
 #[cfg(test)]
 mod tests {
-    use std::os::fd::{OwnedFd, FromRawFd};
+    use std::{os::fd::{OwnedFd, FromRawFd}, io::Read};
 
     use super::*;
 
@@ -256,7 +256,6 @@ mod tests {
     #[test]
     fn local_openat2_test() {
         let result = async_run(async {
-
             let result = async_open("/tmp/testowy-uring.txt", OpenMode::new().create(true, 0o777)).await;
             assert!(result.is_ok());
             1
@@ -266,6 +265,33 @@ mod tests {
         assert_eq!(result, 1);
     }
 
+
+    #[test]
+    fn local_openat2_and_write_test() {
+        let result = async_run(async {
+            let result = async_open("/tmp/testowy-uring.txt", OpenMode::new().create(true, 0o777)).await;
+            assert!(result.is_ok());
+
+            let content: Vec<u8> = vec![116, 101, 115, 116];
+            let fd = &result.unwrap();
+
+            let result = async_write(fd, content, None).await;
+            assert!(result.is_ok());
+            assert!(result.unwrap().len() == 4);
+
+            let content: Vec<u8> = Vec::with_capacity(10);
+            let result = async_read_into(fd, content, Some(0)).await;
+            assert!(result.is_ok());
+            let read_content = result.unwrap();
+            assert_eq!(read_content.len(), 4);
+            assert_eq!(read_content.capacity(), 10);
+            assert_eq!(read_content, vec![116, 101, 115, 116]);
+            1
+        });
+
+        // ensure it actually executed
+        assert_eq!(result, 1);
+    }
     #[test]
     fn local_openat2_and_close_test() {
         let result = async_run(async {
@@ -330,7 +356,7 @@ mod tests {
         use fbs_library::system_error::SystemError;
 
         let result = async_run(async {
-            let data = async_read_into(&-1, vec![]);
+            let data = async_read_into(&-1, vec![], None);
             let data = data.await;
 
             assert!(data.is_err());
@@ -349,7 +375,7 @@ mod tests {
         let result = async_run(async {
             let mut ops = AsyncLinkedOps::new();
 
-            let r1 = ops.add(async_read_into(&-1, vec![]));
+            let r1 = ops.add(async_read_into(&-1, vec![], None));
             let r2 = ops.add(async_close(-1));
 
             let succeeded = ops.await;
@@ -420,7 +446,7 @@ mod tests {
             let mut buffer = Vec::new();
             buffer.resize(100, 0);
 
-            let data = async_read_into(&testfd, buffer).timeout(Duration::new(0, 1_000_000));
+            let data = async_read_into(&testfd, buffer, None).timeout(Duration::new(0, 1_000_000));
             let data = data.await;
 
             assert!(data.is_err());
@@ -438,7 +464,7 @@ mod tests {
             let mut buffer = Vec::new();
             buffer.resize(100, 0);
 
-            let data = async_read_into(&-1, buffer).timeout(Duration::new(0, 1_000_000));
+            let data = async_read_into(&-1, buffer, None).timeout(Duration::new(0, 1_000_000));
             let data = data.await;
 
             assert!(data.is_err());
@@ -486,7 +512,7 @@ mod tests {
 
                 let mut ops = AsyncLinkedOps::new();
 
-                ops.add(async_read_into(&testfd, buffer));
+                ops.add(async_read_into(&testfd, buffer, None));
                 ops.add(async_sleep(Duration::new(5, 0)));
 
                 ops.await;
