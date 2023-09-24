@@ -57,7 +57,7 @@ pub struct SignalFd {
 }
 
 impl SignalFd {
-    pub fn new(mask: &SignalSet, flags: i32) -> Result<Self, SystemError> {
+    pub fn new(mask: SignalSet, flags: i32) -> Result<Self, SystemError> {
         unsafe {
             let fd = libc::signalfd(-1, mask.as_ptr(), flags);
             match fd {
@@ -81,7 +81,7 @@ impl SignalFd {
         }
     }
 
-    pub fn set_signal_mask(&mut self, mask: &SignalSet) -> Result<(), SystemError> {
+    pub fn set_signal_mask(&mut self, mask: SignalSet) -> Result<(), SystemError> {
         unsafe {
             let fd = libc::signalfd(self.fd.as_raw_fd(), mask.as_ptr(), 0);
             match fd {
@@ -112,7 +112,7 @@ mod tests {
     #[test]
     fn signalfd_create() {
         let mask = SignalSet::full();
-        let signalfd = SignalFd::new(&mask, SignalFdFlags::new().flags()).unwrap();
+        let signalfd = SignalFd::new(mask, SignalFdFlags::new().flags()).unwrap();
 
         assert_eq!(signalfd.non_blocking(), false);
         assert_eq!(signalfd.close_on_exec(), false);
@@ -121,7 +121,7 @@ mod tests {
     #[test]
     fn signalfd_create2() {
         let mask = SignalSet::full();
-        let signalfd = SignalFd::new(&mask, SignalFdFlags::new().close_on_exec(true).non_blocking(true).flags()).unwrap();
+        let signalfd = SignalFd::new(mask, SignalFdFlags::new().close_on_exec(true).non_blocking(true).flags()).unwrap();
 
         assert_eq!(signalfd.non_blocking(), true);
         assert_eq!(signalfd.close_on_exec(), true);
@@ -131,12 +131,12 @@ mod tests {
     fn signalfd_change() {
         let mask = SignalSet::full();
         let mask2 = SignalSet::empty();
-        let mut signalfd = SignalFd::new(&mask, SignalFdFlags::new().close_on_exec(true).non_blocking(true).flags()).unwrap();
+        let mut signalfd = SignalFd::new(mask, SignalFdFlags::new().close_on_exec(true).non_blocking(true).flags()).unwrap();
 
         assert_eq!(signalfd.non_blocking(), true);
         assert_eq!(signalfd.close_on_exec(), true);
 
-        let err = signalfd.set_signal_mask(&mask2);
+        let err = signalfd.set_signal_mask(mask2);
         assert_eq!(err.is_ok(), true);
         assert_eq!(signalfd.non_blocking(), true);
         assert_eq!(signalfd.close_on_exec(), true);
