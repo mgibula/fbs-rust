@@ -1,3 +1,4 @@
+use std::os::fd::IntoRawFd;
 use std::{ffi::CString, mem::ManuallyDrop};
 use std::time::Duration;
 use std::alloc::Layout;
@@ -144,12 +145,42 @@ impl Default for Buffer {
     }
 }
 
+#[repr(transparent)]
+#[derive(Debug)]
+pub struct MaybeFd(i32);
+
+impl MaybeFd {
+    pub fn new<T: IntoRawFd>(fd: T) -> Self {
+        Self(fd.into_raw_fd())
+    }
+
+    fn take_fd(&mut self) -> i32 {
+        let result = self.0;
+        self.0 = -1;
+        result
+    }
+}
+
+impl Default for MaybeFd {
+    fn default() -> Self {
+        Self(-1)
+    }
+}
+
+impl Drop for MaybeFd {
+    fn drop(&mut self) {
+        if self.0 >= 0 {
+            unsafe { libc::close(self.0); }
+        }
+    }
+}
+
 pub enum IOUringOp {
     InProgress((u64, usize)),
 
     Nop(),
-    Close(i32),                         // fd
-    Open(CString, i32, u32),            // path, flags, mode
+    Close(MaybeFd),                    // fd
+    Open(CString, i32, u32),           // path, flags, mode
     Read(i32, Buffer, Option<u64>),    // fd, buffer, offset
     Write(i32, Buffer, Option<u64>),   // fd, buffer, offset
     Socket(i32, i32, i32),
@@ -329,7 +360,7 @@ impl Reactor {
             let index = self.get_next_index();
 
             let mut rop = self.get_rop();
-            let requested = std::mem::replace(&mut req.op, IOUringOp::InProgress((rop.seq_number(), index)));
+            let mut requested = std::mem::replace(&mut req.op, IOUringOp::InProgress((rop.seq_number(), index)));
 
             unsafe {
                 let parameters = &mut rop.ptr.parameters;
@@ -337,8 +368,8 @@ impl Reactor {
                     IOUringOp::Nop() => {
                         io_uring_prep_nop(sqe.ptr);
                     },
-                    IOUringOp::Close(fd) => {
-                        io_uring_prep_close(sqe.ptr, fd);
+                    IOUringOp::Close(ref mut fd) => {
+                        io_uring_prep_close(sqe.ptr, fd.take_fd());
                     },
                     IOUringOp::Open(path, flags, mode) => {
                         parameters.path = path;

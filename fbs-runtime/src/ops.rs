@@ -14,6 +14,7 @@ use super::AsyncOpResult;
 use super::IoUringCQE;
 use super::ReactorOpParameters;
 use super::Buffer;
+use super::MaybeFd;
 
 use fbs_library::system_error::SystemError;
 use fbs_library::socket::Socket;
@@ -178,11 +179,11 @@ pub fn async_nop() -> AsyncNop {
 }
 
 pub fn async_close<T: IntoRawFd>(fd: T) -> AsyncClose {
-    AsyncOp::new(IOUringOp::Close(fd.into_raw_fd()))
+    AsyncOp::new(IOUringOp::Close(MaybeFd::new(fd)))
 }
 
 pub fn async_close_with_result<T: IntoRawFd>(fd: T) -> AsyncCloseWithResult {
-    AsyncOp::new(IOUringOp::Close(fd.into_raw_fd()))
+    AsyncOp::new(IOUringOp::Close(MaybeFd::new(fd)))
 }
 
 pub fn async_open<P: AsRef<Path>>(path: P, options: &OpenMode) -> AsyncOpen {
