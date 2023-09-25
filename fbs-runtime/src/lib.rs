@@ -16,6 +16,7 @@ use fbs_reactor::*;
 mod ops;
 mod linked_ops;
 
+pub mod async_utils;
 pub mod http_client;
 
 pub use ops::*;
