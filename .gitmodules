@@ -1,3 +1,6 @@
 [submodule "liburing-sys/liburing"]
 	path = liburing-sys/liburing
 	url = https://github.com/axboe/liburing.git
+[submodule "libcurl-sys/curl"]
+	path = libcurl-sys/curl
+	url = https://github.com/curl/curl.git

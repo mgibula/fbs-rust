@@ -6,5 +6,6 @@ members = [
     "fbs-runtime",
     "fbs-reactor",
     "liburing-sys",
+    "libcurl-sys",
     "test-sandbox",
 ]
