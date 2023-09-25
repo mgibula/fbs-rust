@@ -4,10 +4,10 @@ use std::rc::Rc;
 use std::pin::Pin;
 use std::collections::VecDeque;
 use std::future::Future;
-use misc::channel::{ChannelTx, ChannelRx, channel_create};
-use misc::indexed_list::IndexedList;
 
-mod misc;
+use fbs_library::channel::{ChannelTx, ChannelRx, channel_create};
+use fbs_library::indexed_list::IndexedList;
+
 mod task_data;
 mod executor_frontend;
 mod executor;
