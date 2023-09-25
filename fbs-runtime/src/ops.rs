@@ -44,6 +44,18 @@ impl<T> AsyncResultEx for Result<T, (SystemError, Vec<u8>)> {
     }
 }
 
+pub struct ResultSuccess;
+
+impl AsyncOpResult for ResultSuccess {
+    type Output = ();
+
+    fn get_result(cqe: IoUringCQE, _params: ReactorOpParameters) -> Self::Output {
+        if cqe.result != 0 {
+            println!("Ignoring CQE result of {}", cqe.result);
+        }
+    }
+}
+
 pub struct ResultErrno;
 
 impl AsyncOpResult for ResultErrno {
@@ -149,7 +161,8 @@ impl<T: Copy + Unpin + 'static> AsyncOpResult for ResultStruct<T> {
 }
 
 pub type AsyncNop = AsyncOp::<ResultErrno>;
-pub type AsyncClose = AsyncOp::<ResultErrno>;
+pub type AsyncClose = AsyncOp::<ResultSuccess>;
+pub type AsyncCloseWithResult = AsyncOp::<ResultErrno>;
 pub type AsyncOpen = AsyncOp::<ResultDescriptor>;
 pub type AsyncSocket = AsyncOp::<ResultErrno>;
 pub type AsyncReadBytes = AsyncOp::<ResultBuffer>;
@@ -157,13 +170,18 @@ pub type AsyncReadStruct<T> = AsyncOp::<ResultStruct<T>>;
 pub type AsyncWrite = AsyncOp::<ResultBuffer>;
 pub type AsyncAccept = AsyncOp::<ResultSocket>;
 pub type AsyncConnect = AsyncOp::<ResultErrno>;
-pub type AsyncTimeout = AsyncOp::<ResultErrnoTimeout>;
+pub type AsyncTimeout = AsyncOp::<ResultSuccess>;
+pub type AsyncTimeoutWithResult = AsyncOp::<ResultErrnoTimeout>;
 
 pub fn async_nop() -> AsyncNop {
     AsyncOp::new(IOUringOp::Nop())
 }
 
 pub fn async_close<T: IntoRawFd>(fd: T) -> AsyncClose {
+    AsyncOp::new(IOUringOp::Close(fd.into_raw_fd()))
+}
+
+pub fn async_close_with_result<T: IntoRawFd>(fd: T) -> AsyncCloseWithResult {
     AsyncOp::new(IOUringOp::Close(fd.into_raw_fd()))
 }
 
@@ -197,5 +215,9 @@ pub fn async_connect<T: AsRawFd>(fd: &T, address: SocketIpAddress) -> AsyncConne
 }
 
 pub fn async_sleep(timeout: Duration) -> AsyncTimeout {
+    AsyncOp::new(IOUringOp::Sleep(timeout))
+}
+
+pub fn async_sleep_with_result(timeout: Duration) -> AsyncTimeoutWithResult {
     AsyncOp::new(IOUringOp::Sleep(timeout))
 }

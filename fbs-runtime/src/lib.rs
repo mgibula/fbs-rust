@@ -311,7 +311,7 @@ mod tests {
             let result = async_open("/tmp/testowy-uring.txt", &options).await;
             assert!(result.is_ok());
 
-            let result = async_close(result.unwrap()).await;
+            let result = async_close_with_result(result.unwrap()).await;
             assert!(result.is_ok());
 
             1
@@ -324,7 +324,7 @@ mod tests {
     #[test]
     fn local_close_test() {
         let result = async_run(async {
-            let result = async_close(-1).await;
+            let result = async_close_with_result(-1).await;
             assert!(result.is_err());
             1
         });
@@ -337,7 +337,7 @@ mod tests {
     fn local_close_test2() {
         let result = async_run(async {
             let testfd = unsafe { OwnedFd::from_raw_fd(libc::dup(0)) };
-            let result = async_close(testfd).await;
+            let result = async_close_with_result(testfd).await;
             assert!(result.is_ok());
             1
         });
@@ -386,7 +386,7 @@ mod tests {
             let mut ops = AsyncLinkedOps::new();
 
             let r1 = ops.add(async_read_into(&-1, vec![], None));
-            let r2 = ops.add(async_close(-1));
+            let r2 = ops.add(async_close_with_result(-1));
 
             let succeeded = ops.await;
 
@@ -434,7 +434,7 @@ mod tests {
         let now = SystemTime::now();
 
         let result = async_run(async {
-            let op = async_sleep(Duration::new(0, 1_000_000));
+            let op = async_sleep_with_result(Duration::new(0, 1_000_000));
             let result = op.await;
 
             assert!(result.is_ok());

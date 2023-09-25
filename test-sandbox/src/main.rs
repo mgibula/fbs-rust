@@ -45,11 +45,7 @@ async fn handle_client(fd: Socket)
         }
     }
 
-    let result = async_close(fd).await;
-    match result {
-        Ok(status) => println!("async close returned: {}", status),
-        Err(err) => println!("async close errored: {}", err),
-    }
+    async_close(fd).await
 }
 
 fn main() {
