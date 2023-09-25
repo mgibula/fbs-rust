@@ -3,6 +3,7 @@ use std::process::Command;
 use std::path::PathBuf;
 
 fn main() {
+    println!("cargo:rerun-if-changed=liburing");
     let out_dir = env::var("OUT_DIR").unwrap();
 
     Command::new("rm")
