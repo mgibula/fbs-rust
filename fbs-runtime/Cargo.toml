@@ -7,5 +7,6 @@ edition = "2021"
 fbs-library = { path = "../fbs-library" }
 fbs-executor = { path = "../fbs-executor" }
 fbs-reactor = { path = "../fbs-reactor" }
+libcurl-sys = { path = "../libcurl-sys" }
 thiserror = "1.0.40"
 libc = "0.2.147"

@@ -26,6 +26,7 @@ fn main() {
             .define("BUILD_STATIC_LIBS", "ON")
             .define("BUILD_TESTING", "OFF")
             .define("CURL_ENABLE_SSL", "OFF")
+            .define("USE_LIBIDN2", "OFF")
             .profile("Release");
 
     let dst = config.build();
