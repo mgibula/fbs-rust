@@ -189,6 +189,7 @@ pub enum IOUringOp {
     Connect(i32, SocketIpAddress),
     Sleep(Duration),
     Cancel(u64, usize),
+    SleepUpdate((u64, usize), Duration),
 }
 
 #[derive(Default)]
@@ -409,11 +410,24 @@ impl Reactor {
                         io_uring_prep_timeout(sqe.ptr, &mut parameters.timeout, 0, 0);
                     },
                     IOUringOp::Cancel(seq, index) => {
-                        if self.cancel_token_is_valid(seq, index) {
-                            io_uring_prep_cancel64(sqe.ptr, index as u64, 0);
-                        } else {
-                            io_uring_prep_cancel64(sqe.ptr, CQE_INVALID, 0);
-                        }
+                        let user_data = match self.cancel_token_is_valid(seq, index) {
+                            true => index as u64,
+                            false => CQE_INVALID,
+                        };
+
+                        io_uring_prep_cancel64(sqe.ptr, user_data, 0);
+                    },
+                    IOUringOp::SleepUpdate((seq, index), timeout) => {
+                        parameters.timeout.tv_sec = timeout.as_secs() as i64;
+                        parameters.timeout.tv_nsec = timeout.subsec_nanos() as i64;
+                        req.timeout = None; // timeout on sleep makes no sense, and more importantly, uses same timeout field in parameters struct
+
+                        let user_data = match self.cancel_token_is_valid(seq, index) {
+                            true => index as u64,
+                            false => CQE_INVALID,
+                        };
+
+                        io_uring_prep_timeout_update(sqe.ptr, &mut parameters.timeout, user_data, 0);
                     },
                     IOUringOp::InProgress(_) => panic!("op already scheduled"),
                 }

@@ -631,5 +631,33 @@ mod tests {
         assert_eq!(result, 1);
     }
 
+    #[test]
+    fn local_schedule_timeout_update() {
+        use std::time::SystemTime;
+
+        let called = Rc::new(Cell::new(false));
+        let called_orig = called.clone();
+
+        let now = SystemTime::now();
+        let result = async_run(async move {
+            let called = called.clone();
+            let token = async_sleep_with_result(std::time::Duration::new(5, 0)).schedule(move |result| {
+                assert!(result.is_ok());
+                called.set(true);
+            });
+
+            async_sleep_update(token, std::time::Duration::new(0, 1_000_000)).await;
+
+            1
+        });
+
+        let elapsed = now.elapsed();
+        assert!(elapsed.is_ok_and(|e| e.as_secs() < 1));
+
+        assert_eq!(called_orig.get(), true);
+
+        // ensure it actually executed
+        assert_eq!(result, 1);
+    }
 
 }
