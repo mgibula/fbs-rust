@@ -410,6 +410,8 @@ impl Reactor {
                     IOUringOp::Cancel(seq, index) => {
                         if self.cancel_token_is_valid(seq, index) {
                             io_uring_prep_cancel64(sqe.ptr, index as u64, 0);
+                        } else {
+                            io_uring_prep_nop(sqe.ptr);
                         }
                     },
                     IOUringOp::InProgress(_) => panic!("op already scheduled"),
