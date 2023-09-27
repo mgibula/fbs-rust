@@ -16,6 +16,7 @@ use super::REACTOR;
 
 pub struct AsyncLinkedOps {
     ops: Vec<(IOUringReq, Rc<Cell<Option<IoUringCQE>>>)>,
+    auto_cancel: bool,
 }
 
 pub struct DelayedResult<T> {
@@ -42,7 +43,7 @@ impl<T> DelayedResult<T> {
 
 impl AsyncLinkedOps {
     pub fn new() -> Self {
-        AsyncLinkedOps { ops: vec![] }
+        AsyncLinkedOps { ops: vec![], auto_cancel: false }
     }
 
     pub fn add<T: AsyncOpResult>(&mut self, op: AsyncOp<T>) -> DelayedResult<T::Output> {
@@ -90,6 +91,7 @@ impl Future for AsyncLinkedOps {
             waker.wake_by_ref();
         }));
 
+        self.auto_cancel = true;
         let mut ops = self.ops.iter_mut().map(|e| {
             &mut e.0
         }).collect::<Vec<_>>();
@@ -104,6 +106,9 @@ impl Future for AsyncLinkedOps {
 
 impl Drop for AsyncLinkedOps {
     fn drop(&mut self) {
+        if !self.auto_cancel {
+            return;
+        }
 
         let cancel_tags = self.ops.iter().filter_map(|e| {
             match (&e.0.op, e.1.get()) {

@@ -104,10 +104,16 @@ impl<T> AsyncValue<T> {
     }
 }
 
-pub struct AsyncOp<T: AsyncOpResult> (IOUringReq, Rc<Cell<AsyncValue<T::Output>>>);
+// iouring request, result, auto-cancel flag
+pub struct AsyncOp<T: AsyncOpResult> (IOUringReq, Rc<Cell<AsyncValue<T::Output>>>, bool);
 
 impl<T: AsyncOpResult> Drop for AsyncOp<T> {
     fn drop(&mut self) {
+        // check if auto cancel is desired
+        if !self.2 {
+            return;
+        }
+
         // short-circuit to check if op has already been completed
         match self.1.replace(AsyncValue::Completed) {
             AsyncValue::InProgress => (),
@@ -134,7 +140,7 @@ impl<T: AsyncOpResult> AsyncOp<T> {
             timeout: None,
         };
 
-        Self(req, Rc::new(Cell::new(AsyncValue::InProgress)))
+        Self(req, Rc::new(Cell::new(AsyncValue::InProgress)), false)
     }
 
     pub fn schedule(mut self, handler: impl Fn(T::Output) + 'static) {
@@ -183,6 +189,7 @@ impl<T: AsyncOpResult> Future for AsyncOp<T> {
                     r.borrow_mut().schedule_linked2(slice::from_mut(&mut &mut self.0))
                 });
 
+                self.2 = true;
                 Poll::Pending
             },
         }
@@ -414,7 +421,29 @@ mod tests {
             assert!(result.is_ok());
 
             let called = called.clone();
-            async_close(result.unwrap()).schedule(move |_| {
+            async_close_with_result(result.unwrap()).schedule(move |result| {
+                assert!(result.is_ok());
+                called.set(true);
+            });
+
+            1
+        });
+
+        assert_eq!(called_orig.get(), true);
+
+        // ensure it actually executed
+        assert_eq!(result, 1);
+    }
+
+    #[test]
+    fn local_schedule_timeout() {
+        let called = Rc::new(Cell::new(false));
+        let called_orig = called.clone();
+
+        let result = async_run(async move {
+            let called = called.clone();
+            async_sleep_with_result(std::time::Duration::new(0, 1_000_000)).schedule(move |result| {
+                assert!(result.is_ok());
                 called.set(true);
             });
 
