@@ -19,6 +19,7 @@ use super::MaybeFd;
 use fbs_library::system_error::SystemError;
 use fbs_library::socket::Socket;
 use fbs_library::socket_address::SocketIpAddress;
+use fbs_library::poll::PollMask;
 
 trait AsyncResultEx {
     fn cancelled(&self) -> bool;
@@ -174,6 +175,7 @@ pub type AsyncConnect = AsyncOp::<ResultErrno>;
 pub type AsyncTimeout = AsyncOp::<ResultSuccess>;
 pub type AsyncTimeoutWithResult = AsyncOp::<ResultErrnoTimeout>;
 pub type AsyncCancel = AsyncOp::<ResultSuccess>;
+pub type AsyncPoll = AsyncOp::<ResultErrno>;
 
 pub fn async_nop() -> AsyncNop {
     AsyncOp::new(IOUringOp::Nop())
@@ -230,4 +232,12 @@ pub fn async_cancel(token: (u64, usize)) -> AsyncCancel {
 
 pub fn async_sleep_update(token: (u64, usize), timeout: Duration) -> AsyncTimeout {
     AsyncOp::new(IOUringOp::SleepUpdate(token, timeout))
+}
+
+pub fn async_poll<T: AsRawFd>(fd: &T, mask: PollMask) -> AsyncPoll {
+    AsyncOp::new(IOUringOp::Poll(fd.as_raw_fd(), mask))
+}
+
+pub fn async_poll_update(token: (u64, usize), mask: PollMask) -> AsyncPoll {
+    AsyncOp::new(IOUringOp::PollUpdate(token, mask))
 }

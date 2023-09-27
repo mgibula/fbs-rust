@@ -7,6 +7,7 @@ use liburing_sys::*;
 use io_uring::*;
 use thiserror::Error;
 use fbs_library::socket_address::{SocketIpAddress, SocketAddressBinary};
+use fbs_library::poll::PollMask;
 
 pub use io_uring::IoUringCQE;
 
@@ -190,6 +191,8 @@ pub enum IOUringOp {
     Sleep(Duration),
     Cancel(u64, usize),
     SleepUpdate((u64, usize), Duration),
+    Poll(i32, PollMask),
+    PollUpdate((u64, usize), PollMask),
 }
 
 #[derive(Default)]
@@ -428,6 +431,17 @@ impl Reactor {
                         };
 
                         io_uring_prep_timeout_update(sqe.ptr, &mut parameters.timeout, user_data, 0);
+                    },
+                    IOUringOp::Poll(fd, mask) => {
+                        io_uring_prep_poll_add(sqe.ptr, fd, mask.into())
+                    },
+                    IOUringOp::PollUpdate((seq, index), mask) => {
+                        let user_data = match self.cancel_token_is_valid(seq, index) {
+                            true => index as u64,
+                            false => CQE_INVALID,
+                        };
+
+                        io_uring_prep_poll_update(sqe.ptr, user_data, user_data, mask.into(), IORING_POLL_UPDATE_EVENTS);
                     },
                     IOUringOp::InProgress(_) => panic!("op already scheduled"),
                 }
