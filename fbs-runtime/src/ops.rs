@@ -173,6 +173,7 @@ pub type AsyncAccept = AsyncOp::<ResultSocket>;
 pub type AsyncConnect = AsyncOp::<ResultErrno>;
 pub type AsyncTimeout = AsyncOp::<ResultSuccess>;
 pub type AsyncTimeoutWithResult = AsyncOp::<ResultErrnoTimeout>;
+pub type AsyncCancel = AsyncOp::<ResultSuccess>;
 
 pub fn async_nop() -> AsyncNop {
     AsyncOp::new(IOUringOp::Nop())
@@ -221,4 +222,8 @@ pub fn async_sleep(timeout: Duration) -> AsyncTimeout {
 
 pub fn async_sleep_with_result(timeout: Duration) -> AsyncTimeoutWithResult {
     AsyncOp::new(IOUringOp::Sleep(timeout))
+}
+
+pub fn async_cancel(token: (u64, usize)) -> AsyncCancel {
+    AsyncOp::new(IOUringOp::Cancel(token.0, token.1))
 }

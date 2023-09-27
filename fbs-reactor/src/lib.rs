@@ -187,6 +187,7 @@ pub enum IOUringOp {
     Accept(i32, i32),
     Connect(i32, SocketIpAddress),
     Sleep(Duration),
+    Cancel(u64, usize),
 }
 
 #[derive(Default)]
@@ -310,25 +311,27 @@ impl Reactor {
             let seq = *seq;
             let index = *index;
 
-            if self.ops.len() <= index {
-                return;
+            if self.cancel_token_is_valid(seq, index) {
+                self.enqueue_cancel(index);
             }
-
-            let op = &self.ops[index];
-            let op = match op {
-                None => return,
-                Some(ptr) => ptr,
-            };
-
-            if op.ptr.seq != seq {
-                return;
-            }
-
-            self.enqueue_cancel(index);
         });
 
         // Fire up cancellations immediately
         self.submit().expect("Error on submit");
+    }
+
+    fn cancel_token_is_valid(&self, seq: u64, index: usize) -> bool {
+        if self.ops.len() <= index {
+            return false;
+        }
+
+        let op = &self.ops[index];
+        let op = match op {
+            None => return false,
+            Some(ptr) => ptr,
+        };
+
+        return op.ptr.seq == seq;
     }
 
     fn enqueue_cancel(&mut self, index: usize) {
@@ -403,6 +406,11 @@ impl Reactor {
                         req.timeout = None; // timeout on sleep makes no sense, and more importantly, uses same timeout field in parameters struct
 
                         io_uring_prep_timeout(sqe.ptr, &mut parameters.timeout, 0, 0);
+                    },
+                    IOUringOp::Cancel(seq, index) => {
+                        if self.cancel_token_is_valid(seq, index) {
+                            io_uring_prep_cancel64(sqe.ptr, index as u64, 0);
+                        }
                     },
                     IOUringOp::InProgress(_) => panic!("op already scheduled"),
                 }

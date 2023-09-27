@@ -143,7 +143,7 @@ impl<T: AsyncOpResult> AsyncOp<T> {
         Self(req, Rc::new(Cell::new(AsyncValue::InProgress)), false)
     }
 
-    pub fn schedule(mut self, handler: impl Fn(T::Output) + 'static) {
+    pub fn schedule(mut self, handler: impl Fn(T::Output) + 'static) -> (u64, usize) {
         self.0.completion = Some(Box::new(move |cqe, params| {
             handler(T::get_result(cqe, params));
         }));
@@ -151,6 +151,11 @@ impl<T: AsyncOpResult> AsyncOp<T> {
         REACTOR.with(|r| {
             r.borrow_mut().schedule_linked2(slice::from_mut(&mut &mut self.0))
         });
+
+        match &self.0.op {
+            &IOUringOp::InProgress(cancel) => cancel,
+            _ => panic!("io_uring schedling failed"),
+        }
     }
 
     pub fn timeout(mut self, timeout: Duration) -> Self {
@@ -447,6 +452,28 @@ mod tests {
                 called.set(true);
             });
 
+            1
+        });
+
+        assert_eq!(called_orig.get(), true);
+
+        // ensure it actually executed
+        assert_eq!(result, 1);
+    }
+
+    #[test]
+    fn local_schedule_timeout_and_cancel() {
+        let called = Rc::new(Cell::new(false));
+        let called_orig = called.clone();
+
+        let result = async_run(async move {
+            let called = called.clone();
+            let token = async_sleep_with_result(std::time::Duration::new(0, 1_000_000)).schedule(move |result| {
+                assert!(result.is_err_and(|r| r.cancelled()));
+                called.set(true);
+            });
+
+            async_cancel(token).await;
             1
         });
 
