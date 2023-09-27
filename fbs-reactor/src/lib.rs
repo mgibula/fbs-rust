@@ -20,6 +20,7 @@ pub enum ReactorError {
 
 const CQE_CANCEL_CQE: u64 = u64::MAX;
 const CQE_TIMEOUT_CQE: u64 = u64::MAX - 1;
+const CQE_INVALID: u64 = u64::MAX - 2;
 
 pub type OpCompletion = Option<Box<dyn Fn(IoUringCQE, ReactorOpParameters)>>;
 
@@ -411,7 +412,7 @@ impl Reactor {
                         if self.cancel_token_is_valid(seq, index) {
                             io_uring_prep_cancel64(sqe.ptr, index as u64, 0);
                         } else {
-                            io_uring_prep_nop(sqe.ptr);
+                            io_uring_prep_cancel64(sqe.ptr, CQE_INVALID, 0);
                         }
                     },
                     IOUringOp::InProgress(_) => panic!("op already scheduled"),
@@ -514,6 +515,7 @@ impl Reactor {
         match index as u64 {
             CQE_TIMEOUT_CQE => (),
             CQE_CANCEL_CQE => (),
+            CQE_INVALID => (),
             index => {
                 let index = index as usize;
                 let mut rop = self.ops[index].take().expect("io_uring returned completed op with incorrect index");
