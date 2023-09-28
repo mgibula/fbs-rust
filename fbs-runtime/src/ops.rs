@@ -230,7 +230,7 @@ pub fn async_cancel(token: (u64, usize)) -> AsyncCancel {
     AsyncOp::new(IOUringOp::Cancel(token.0, token.1))
 }
 
-pub fn async_sleep_update(token: (u64, usize), timeout: Duration) -> AsyncTimeout {
+pub fn async_sleep_update(token: (u64, usize), timeout: Duration) -> AsyncTimeoutWithResult {
     AsyncOp::new(IOUringOp::SleepUpdate(token, timeout))
 }
 
