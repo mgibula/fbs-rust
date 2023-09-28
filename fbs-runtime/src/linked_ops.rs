@@ -84,7 +84,7 @@ impl Future for AsyncLinkedOps {
         let prev_cb = last_op.0.completion.take();
         let waker = cx.waker().clone();
         last_op.0.completion = Some(Box::new(move |cqe, params| {
-            if let Some(cb) = &prev_cb {
+            if let Some(cb) = prev_cb {
                 cb(cqe, params);
             }
 

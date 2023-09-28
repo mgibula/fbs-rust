@@ -23,7 +23,7 @@ const CQE_CANCEL_CQE: u64 = u64::MAX;
 const CQE_TIMEOUT_CQE: u64 = u64::MAX - 1;
 const CQE_INVALID: u64 = u64::MAX - 2;
 
-pub type OpCompletion = Option<Box<dyn Fn(IoUringCQE, ReactorOpParameters)>>;
+pub type OpCompletion = Option<Box<dyn FnOnce(IoUringCQE, ReactorOpParameters)>>;
 
 pub struct IOUringReq {
     pub op: IOUringOp,

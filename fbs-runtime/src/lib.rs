@@ -143,7 +143,7 @@ impl<T: AsyncOpResult> AsyncOp<T> {
         Self(req, Rc::new(Cell::new(AsyncValue::InProgress)), false)
     }
 
-    pub fn schedule(mut self, handler: impl Fn(T::Output) + 'static) -> (u64, usize) {
+    pub fn schedule(mut self, handler: impl FnOnce(T::Output) + 'static) -> (u64, usize) {
         self.0.completion = Some(Box::new(move |cqe, params| {
             handler(T::get_result(cqe, params));
         }));
