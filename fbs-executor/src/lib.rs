@@ -38,6 +38,6 @@ pub struct TaskData {
 }
 
 pub struct TaskHandle<T> {
-    task: Rc<RefCell<TaskData>>,
+    task: Option<Rc<RefCell<TaskData>>>,
     result: Rc<Cell<Option<T>>>,
 }

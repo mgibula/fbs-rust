@@ -27,7 +27,7 @@ impl ExecutorFrontend {
 
         self.channel.send(ExecutorCmd::Schedule(task.clone()));
         TaskHandle {
-            task,
+            task: Some(task),
             result: result_ptr,
         }
     }
