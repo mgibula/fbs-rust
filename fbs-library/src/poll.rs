@@ -1,9 +1,13 @@
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct PollMask {
     mask: i16
 }
 
 impl PollMask {
+    pub fn empty(&self) -> bool {
+        self.mask == 0
+    }
+
     pub fn read(&mut self, value: bool) -> Self {
         if value {
             self.mask |= libc::POLLIN;
