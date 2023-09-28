@@ -219,6 +219,8 @@ fn async_run_all() {
 mod tests {
     use std::os::fd::{OwnedFd, FromRawFd};
 
+    use fbs_library::poll::PollMask;
+
     use super::*;
 
     #[test]
@@ -658,6 +660,42 @@ mod tests {
 
         // ensure it actually executed
         assert_eq!(result, 1);
+    }
+
+    #[test]
+    fn local_poll_df() {
+        use std::time::SystemTime;
+        use fbs_library::pipe::*;
+
+        let called = Rc::new(Cell::new(false));
+        let called_orig = called.clone();
+        let (rx, tx) = pipe(PipeFlags::default()).unwrap();
+
+        let now = SystemTime::now();
+        async_run(async move {
+            let called = called.clone();
+            async_spawn(async move {
+                let mut data = vec![];
+                data.extend_from_slice(b"test");
+
+                async_poll(&tx, PollMask::default().write(true)).await;
+                async_write(&tx, data, None).await;
+
+                1
+            });
+
+            async_spawn(async move {
+                async_poll(&rx, PollMask::default().read(true)).await;
+
+                let mut buffer = Vec::with_capacity(10);
+                let result = async_read_into(&rx, buffer, None).await.unwrap();
+                called.set(true);
+
+                assert_eq!(result, b"test");
+            });
+        });
+
+        assert_eq!(called_orig.get(), true);
     }
 
 }
