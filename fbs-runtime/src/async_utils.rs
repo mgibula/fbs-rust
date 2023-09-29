@@ -6,6 +6,7 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 use std::cell::RefCell;
 
+#[derive(Debug)]
 pub struct AsyncChannelRx<T> {
     backend: Rc<AsyncChannelBackend<T>>,
 }
@@ -16,6 +17,7 @@ impl<T> Clone for AsyncChannelRx<T> {
     }
 }
 
+#[derive(Debug)]
 pub struct AsyncChannelTx<T> {
     backend: Rc<AsyncChannelBackend<T>>,
 }
@@ -26,6 +28,7 @@ impl<T> Clone for AsyncChannelTx<T> {
     }
 }
 
+#[derive(Debug)]
 struct AsyncChannelBackend<T> {
     messages: RefCell<VecDeque<T>>,
     wakers: RefCell<Vec<Waker>>,

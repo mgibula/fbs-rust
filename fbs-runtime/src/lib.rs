@@ -1,3 +1,5 @@
+#[macro_use] extern crate const_cstr;
+
 use std::future::Future;
 use std::cell::RefCell;
 use std::pin::Pin;

@@ -50,4 +50,17 @@ impl<T> TaskHandle<T> {
             None => (),
         }
     }
+
+    pub fn cancel_by_ref(&mut self) {
+        match &self.task {
+            Some(task) => {
+                let mut task_data = task.borrow_mut();
+                task_data.future = None;
+                task_data.channel.send(crate::ExecutorCmd::Schedule(task.clone()));
+            },
+            None => (),
+        }
+
+        self.task = None;
+    }
 }

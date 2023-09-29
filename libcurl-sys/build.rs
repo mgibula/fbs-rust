@@ -26,7 +26,8 @@ fn main() {
             .define("BUILD_STATIC_LIBS", "ON")
             .define("BUILD_TESTING", "OFF")
             .define("CURL_ENABLE_SSL", "OFF")
-            .define("USE_LIBIDN2", "OFF")
+            .define("CURL_LIBIDN2", "OFF")
+            .define("CURL_ZLIB", "OFF")
             .profile("Release");
 
     let dst = config.build();
@@ -43,7 +44,9 @@ fn main() {
         .opaque_type("^CURL.*")
         .allowlist_type("^curl.*")
         .allowlist_type("^CURL.*")
+        .allowlist_var("^CURL.*")
         .allowlist_recursively(false)
+        .prepend_enum_name(false)
         .header("wrapper.h")
         .generate()
         .expect("Unable to generate bindings");
