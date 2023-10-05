@@ -1,6 +1,3 @@
-use std::cell::Ref;
-use std::collections::VecDeque;
-use std::f32::consts::E;
 use std::ffi::CString;
 use std::marker::PhantomPinned;
 use std::{rc::Rc, cell::RefCell};
@@ -287,6 +284,7 @@ impl HttpClientData {
             curl_multi_setopt(self.multi_handle, CURLMOPT_TIMERDATA, this);
 
             let poller = self.poller.clone();
+            let multi_handle = self.multi_handle;
             self.as_mut().get_unchecked_mut().event_processor = async_spawn(async move {
                 loop {
                     let event = poller.ptr.borrow_mut().io_events_rx.receive().await;
@@ -300,11 +298,27 @@ impl HttpClientData {
                             };
 
                             let mut running: i32 = 0;
-                            // let error = curl_multi_socket_action();
+                            let error = curl_multi_socket_action(multi_handle, fd as u32, mask as i32, &mut running);
+                            assert_eq!(error, 0);
                         },
                         IOEvent::TimerFired => {
-
+                            let mut running: i32 = 0;
+                            let error = curl_multi_socket_action(multi_handle, CURL_SOCKET_TIMEOUT as u32, 0, &mut running);
+                            assert_eq!(error, 0);
                         },
+                    }
+
+                    loop {
+                        let mut msg_in_queue: i32 = 0;
+                        let maybe_msg = curl_multi_info_read(multi_handle, &mut msg_in_queue);
+                        let msg = match maybe_msg.is_null() {
+                            true => break,
+                            false => &*maybe_msg,
+                        };
+
+                        if msg.msg == CURLMSG_DONE {
+                            let easy = msg.easy_handle;
+                        }
                     }
                 }
             });
@@ -350,12 +364,13 @@ impl HttpClientData {
 impl Drop for HttpClientData {
     fn drop(&mut self) {
         unsafe {
+            self.event_processor.cancel_by_ref();
+
             self.responses.iter_mut().for_each(|e| {
                 curl_multi_remove_handle(self.multi_handle, e.easy_handle());
             });
 
             curl_multi_cleanup(self.multi_handle);
-            self.event_processor.cancel_by_ref();
         }
     }
 }
