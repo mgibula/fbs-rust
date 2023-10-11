@@ -36,6 +36,7 @@ thread_local! {
         e.borrow().get_frontend()
     });
     static REACTOR: RefCell<Reactor> = RefCell::new(Reactor::new().expect("Error creating io_uring reactor"));
+    static COMPLETIONS: RefCell<Vec<Box<dyn FnOnce()>>> = RefCell::new(Vec::new());
 }
 
 pub fn async_spawn<T: 'static>(future: impl Future<Output = T> + 'static) -> TaskHandle<T>  {
@@ -80,9 +81,14 @@ fn local_executor_run_all() {
 }
 
 fn local_reactor_process_ops() -> bool {
-    REACTOR.with(|r| {
+    let processed = REACTOR.with(|r| {
         r.borrow_mut().process_ops().expect("io_uring error")
-    })
+    });
+
+    let completions = COMPLETIONS.with(|c| std::mem::take(&mut *c.borrow_mut()));
+    completions.into_iter().for_each(|f| f());
+
+    processed
 }
 
 pub trait AsyncOpResult : Unpin {
@@ -146,8 +152,11 @@ impl<T: AsyncOpResult> AsyncOp<T> {
     }
 
     pub fn schedule(mut self, handler: impl FnOnce(T::Output) + 'static) -> (u64, usize) {
+
         self.0.completion = Some(Box::new(move |cqe, params| {
-            handler(T::get_result(cqe, params));
+            COMPLETIONS.with(|c| {
+                c.borrow_mut().push(Box::new(move || handler(T::get_result(cqe, params))));
+            });
         }));
 
         REACTOR.with(|r| {
