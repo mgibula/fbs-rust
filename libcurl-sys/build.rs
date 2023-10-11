@@ -26,7 +26,7 @@ fn main() {
             .define("BUILD_STATIC_LIBS", "ON")
             .define("BUILD_TESTING", "OFF")
             .define("CURL_ENABLE_SSL", "OFF")
-            .define("CURL_LIBIDN2", "OFF")
+            .define("USE_LIBIDN2", "OFF")
             .define("CURL_ZLIB", "OFF")
             .profile("Release");
 
