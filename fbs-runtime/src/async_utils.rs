@@ -2,6 +2,7 @@ use std::pin::Pin;
 use std::cell::Cell;
 use std::future::Future;
 use std::task::{Context, Waker, Poll};
+use std::fmt::{Debug, Formatter};
 
 use std::collections::VecDeque;
 use std::rc::Rc;
@@ -119,7 +120,15 @@ struct AsyncSignalBackend {
     waiters: Cell<Vec<Waker>>,
 }
 
-#[derive(Clone)]
+impl Debug for AsyncSignalBackend {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AsyncSignalBackend")
+            .field("fired", &self.fired)
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct AsyncSignal {
     ptr: Rc<AsyncSignalBackend>,
 }
