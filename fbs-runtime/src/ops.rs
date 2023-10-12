@@ -81,7 +81,7 @@ impl AsyncOpResult for ResultErrnoTimeout {
 
     fn get_result(cqe: IoUringCQE, _params: ReactorOpParameters) -> Self::Output {
         match cqe.result {
-            i if cqe.result > 0 => Ok(i),
+            i if cqe.result >= 0 => Ok(i),
             _i if cqe.result == -libc::ETIME => Ok(0),
             i => Err(SystemError::new(-i))
         }
