@@ -191,8 +191,8 @@ impl SocketData {
         self.fd = fd;
     }
 
-    fn need_update(&self) -> bool {
-        self.armed == self.wanted
+    fn need_update(&self, wanted: PollMask) -> bool {
+        self.armed != wanted
     }
 
     fn wanted(&self) -> PollMask {
@@ -567,7 +567,7 @@ unsafe fn poll_cleanup(mut socket: Box<SocketData>) {
 
 unsafe fn poll_socket(poller: HttpClientDataPtr, socket: &mut SocketData, wanted: PollMask) {
     let socket_ptr = socket as *mut SocketData;
-    if !socket.need_update() {
+    if !socket.need_update(wanted) {
         return;
     }
 
