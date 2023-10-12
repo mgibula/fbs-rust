@@ -1,6 +1,7 @@
 use std::ffi::CString;
 use std::marker::PhantomPinned;
-use std::{rc::Rc, cell::RefCell};
+use std::rc::Rc;
+use std::cell::{Cell, RefCell};
 use std::pin::Pin;
 use std::time::Duration;
 
@@ -172,63 +173,63 @@ impl HttpResponseInner {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone)]
 struct SocketData
 {
-    fd: i32,
-    armed: PollMask,
-    wanted: PollMask,
-    change_in_flight: bool,
-    poll_op: Option<(u64, usize)>,
+    fd: Cell<i32>,
+    armed: Cell<PollMask>,
+    wanted: Cell<PollMask>,
+    change_in_flight: Cell<bool>,
+    poll_op: Cell<Option<(u64, usize)>>,
 }
 
 impl SocketData {
     fn fd(&self) -> i32 {
-        self.fd
+        self.fd.get()
     }
 
-    fn set_fd(&mut self, fd: i32) {
-        self.fd = fd;
+    fn set_fd(&self, fd: i32) {
+        self.fd.set(fd);
     }
 
     fn need_update(&self, wanted: PollMask) -> bool {
-        self.armed != wanted
+        self.armed.get() != wanted
     }
 
     fn wanted(&self) -> PollMask {
-        self.wanted
+        self.wanted.get()
     }
 
-    fn set_wanted(&mut self, wanted: PollMask) {
-        self.wanted = wanted;
+    fn set_wanted(&self, wanted: PollMask) {
+        self.wanted.set(wanted);
     }
 
-    fn set_armed(&mut self, armed: PollMask) {
-        self.armed = armed;
+    fn set_armed(&self, armed: PollMask) {
+        self.armed.set(armed);
     }
 
     fn change_in_flight(&self) -> bool {
-        self.change_in_flight
+        self.change_in_flight.get()
     }
 
-    fn set_change_in_flight(&mut self, value: bool) {
-        self.change_in_flight = value;
+    fn set_change_in_flight(&self, value: bool) {
+        self.change_in_flight.set(value);
     }
 
-    fn take_poll_op(&mut self) -> Option<(u64, usize)> {
+    fn take_poll_op(&self) -> Option<(u64, usize)> {
         self.poll_op.take()
     }
 
     fn get_poll_op(&self) -> Option<(u64, usize)> {
-        self.poll_op
+        self.poll_op.get()
     }
 
-    fn set_poll_op(&mut self, token: (u64, usize)) {
-        self.poll_op = Some(token);
+    fn set_poll_op(&self, token: (u64, usize)) {
+        self.poll_op.set(Some(token));
     }
 
-    fn clear_poll_op(&mut self) {
-        self.poll_op = None;
+    fn clear_poll_op(&self) {
+        self.poll_op.set(None);
     }
 }
 
@@ -499,21 +500,33 @@ unsafe extern "C" fn socket_callback(_curl: *mut CURL, sockfd: curl_socket_t, wh
 
     let socket = match sockp.is_null() {
         true => {
-            let mut socket = Box::new(SocketData::default());
+            let socket = Rc::new(SocketData::default());
             socket.set_fd(sockfd as i32);
 
-            curl_multi_assign(client.multi_handle, sockfd, socket.as_mut() as *mut SocketData as *mut libc::c_void);
-            Box::leak(socket)
+            // socket refcount is increased here, this is paired with CURL_POLL_REMOVE handler below
+            curl_multi_assign(client.multi_handle, sockfd, Rc::into_raw(socket.clone()) as *mut SocketData as *mut libc::c_void);
+            socket
         },
         false => {
-            &mut *(sockp as *mut SocketData)
+            // need to increase refcount to keep it alive
+            Rc::increment_strong_count(sockp as *const SocketData);
+            Rc::from_raw(sockp as *const SocketData)
         },
     };
 
     let mask = match what as u32 {
         CURL_POLL_REMOVE    => {
+            // failsafe check
+            if !sockp.is_null() {
+                // see comment above
+                Rc::decrement_strong_count(sockp as *const SocketData);
+            } else {
+                eprintln!("Got CURL_POLL_REMOVE call without socket data associated with it");
+            }
+
+            // documentation doesn't specify if socket specific data are cleared with CURL_POLL_REMOVE, so clear it manually
             curl_multi_assign(client.multi_handle, sockfd, std::ptr::null_mut::<libc::c_void>());
-            poll_cleanup(Box::from_raw(socket));
+            poll_cleanup(socket);
             return 0;
         },
         CURL_POLL_IN        => PollMask::default().read(true),
@@ -559,14 +572,13 @@ extern "C" fn write_proxy(ptr: *mut libc::c_char, size: libc::size_t, nmemb: lib
     size * nmemb
 }
 
-unsafe fn poll_cleanup(mut socket: Box<SocketData>) {
+unsafe fn poll_cleanup(socket: Rc<SocketData>) {
     if let Some(token) = socket.take_poll_op() {
         async_cancel(token).schedule(move |_|{});
     }
 }
 
-unsafe fn poll_socket(poller: HttpClientDataPtr, socket: &mut SocketData, wanted: PollMask) {
-    let socket_ptr = socket as *mut SocketData;
+unsafe fn poll_socket(poller: HttpClientDataPtr, socket: Rc<SocketData>, wanted: PollMask) {
     if !socket.need_update(wanted) {
         return;
     }
@@ -585,7 +597,6 @@ unsafe fn poll_socket(poller: HttpClientDataPtr, socket: &mut SocketData, wanted
             socket.set_change_in_flight(true);
 
             async_cancel(token).schedule(move |_| {
-                let socket = &mut *socket_ptr;
                 socket.set_armed(PollMask::default());
                 socket.clear_poll_op();
                 socket.set_change_in_flight(false);
@@ -603,18 +614,20 @@ unsafe fn poll_socket(poller: HttpClientDataPtr, socket: &mut SocketData, wanted
             // println!("poll socket - poll add");
             socket.set_armed(wanted);
             let poller_ptr = poller.clone();
+
+            let socket_data = socket.clone();
             let token = async_poll(&socket.fd(), wanted).schedule(move |result| {
-                let socket = &mut *socket_ptr;
                 match result {
-                    Ok(mask) => poller_ptr.push_event(IOEvent::FdReady(socket.fd(), (mask & libc::POLLIN as i32) != 0, (mask & libc::POLLOUT as i32) != 0)),
+                    Ok(mask) => poller_ptr.push_event(IOEvent::FdReady(socket_data.fd(), (mask & libc::POLLIN as i32) != 0, (mask & libc::POLLOUT as i32) != 0)),
                     Err(error) if error.cancelled() => (),
-                    Err(error) => panic!("Poll operation for fd {} returned {}", socket.fd(), error),
+                    Err(error) => panic!("Poll operation for fd {} returned {}", socket_data.fd(), error),
                 };
 
-                socket.set_armed(PollMask::default());
-                socket.clear_poll_op();
+                socket_data.set_armed(PollMask::default());
+                socket_data.clear_poll_op();
 
-                poll_socket(poller.clone(), socket, socket.wanted());
+                let wanted = socket_data.wanted();
+                poll_socket(poller.clone(), socket_data, wanted);
             });
 
             socket.set_poll_op(token);
@@ -625,16 +638,18 @@ unsafe fn poll_socket(poller: HttpClientDataPtr, socket: &mut SocketData, wanted
             socket.set_change_in_flight(true);
             socket.set_wanted(wanted);
 
+            let socket_data = socket.clone();
             async_poll_update(token, wanted).schedule(move |result| {
-                let socket = &mut *socket_ptr;
-                socket.set_change_in_flight(false);
+                socket_data.set_change_in_flight(false);
                 match result {
                     Ok(_) => {
-                        socket.set_armed(wanted);
-                        poll_socket(poller.clone(), socket, socket.wanted());
+                        socket_data.set_armed(wanted);
+                        let wanted = socket_data.wanted();
+                        poll_socket(poller.clone(), socket_data, wanted);
                     },
                     Err(error) if error.errno() == libc::ENOENT => {
-                        poll_socket(poller.clone(), socket, socket.wanted());
+                        let wanted = socket_data.wanted();
+                        poll_socket(poller.clone(), socket_data, wanted);
                     },
                     Err(error) if error.cancelled() => (),
                     Err(error) if error.errno() == libc::EALREADY => (),
