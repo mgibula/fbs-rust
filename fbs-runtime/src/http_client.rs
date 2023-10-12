@@ -512,6 +512,7 @@ unsafe extern "C" fn socket_callback(_curl: *mut CURL, sockfd: curl_socket_t, wh
 
     let mask = match what as u32 {
         CURL_POLL_REMOVE    => {
+            curl_multi_assign(client.multi_handle, sockfd, std::ptr::null_mut::<libc::c_void>());
             poll_cleanup(Box::from_raw(socket));
             return 0;
         },
