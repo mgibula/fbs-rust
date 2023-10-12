@@ -5,7 +5,7 @@ use std::pin::Pin;
 use std::time::Duration;
 
 use super::async_spawn;
-use super::async_utils::{async_channel_create, AsyncChannelRx, AsyncChannelTx};
+use super::async_utils::{async_channel_create, AsyncChannelRx, AsyncChannelTx, AsyncSignal};
 use super::ops::{async_sleep_with_result, async_sleep_update, async_cancel, async_poll, async_poll_update};
 
 use fbs_executor::TaskHandle;
@@ -27,8 +27,14 @@ pub enum HttpMethod {
 
 #[derive(Debug, Clone)]
 pub struct HttpRequest {
-    method: HttpMethod,
-    url: String,
+    pub method: HttpMethod,
+    pub url: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct HttpResponseData {
+    http_code: i32,
+    response_body: Vec<u8>,
 }
 
 impl HttpRequest {
@@ -39,13 +45,13 @@ impl HttpRequest {
 
 #[derive(Debug, Clone)]
 pub struct HttpResponse {
-    ptr: Rc<RefCell<Pin<Box<HttpResponseData>>>>,
+    ptr: Rc<RefCell<Pin<Box<HttpResponseInner>>>>,
 }
 
 impl HttpResponse {
     fn new() -> Result<Self, ()> {
         let result = Self {
-            ptr: Rc::new(RefCell::new(Box::pin(HttpResponseData::new()?))),
+            ptr: Rc::new(RefCell::new(Box::pin(HttpResponseInner::new()?))),
         };
 
         result.ptr.borrow_mut().as_mut().init();
@@ -59,6 +65,23 @@ impl HttpResponse {
     fn easy_handle(&self) -> *mut CURL {
         self.ptr.borrow().handle
     }
+
+    fn complete_request(&self) {
+        self.ptr.borrow_mut().as_mut().set_completed();
+    }
+
+    fn fail_request(&self) {
+        self.ptr.borrow_mut().as_mut().set_completed();
+    }
+
+    pub async fn wait_for_completion(self) -> HttpResponseData {
+        // clone is to avoid holding borrow across suspension point
+        let waiter = self.ptr.borrow().as_ref().get_completion_waiter();
+        waiter.await;
+
+        let buffer = std::mem::take(&mut self.ptr.borrow_mut().as_mut().take_data_received());
+        HttpResponseData { http_code: 200, response_body: buffer }
+    }
 }
 
 #[derive(Debug)]
@@ -68,15 +91,25 @@ struct UploadBuffer {
 }
 
 #[derive(Debug)]
-struct HttpResponseData {
+struct HttpResponseInner {
     handle: *mut CURL,
     data_to_send: UploadBuffer,
     data_received: Vec<u8>,
     curl_error: [u8; CURL_ERROR_SIZE as usize],
     url_cstring: CString,
+    completion: AsyncSignal,
+    _pin: PhantomPinned,
 }
 
-impl HttpResponseData {
+impl Drop for HttpResponseInner {
+    fn drop(&mut self) {
+        unsafe {
+            curl_easy_cleanup(self.handle);
+        }
+    }
+}
+
+impl HttpResponseInner {
     pub fn new() -> Result<Self, ()> {
         unsafe {
             let handle = curl_easy_init();
@@ -90,21 +123,23 @@ impl HttpResponseData {
                 data_received: vec![],
                 curl_error: [0; CURL_ERROR_SIZE as usize],
                 url_cstring: CString::default(),
+                completion: AsyncSignal::new(),
+                _pin: PhantomPinned,
             })
         }
     }
 
     fn init(mut self: Pin<&mut Self>) {
         unsafe {
-            curl_easy_setopt(self.handle, CURLOPT_READFUNCTION, &read_proxy);
-            curl_easy_setopt(self.handle, CURLOPT_READDATA, &mut self.data_to_send);
-            curl_easy_setopt(self.handle, CURLOPT_WRITEFUNCTION, &write_proxy);
-            curl_easy_setopt(self.handle, CURLOPT_WRITEDATA, &mut self.data_received);
+            curl_easy_setopt(self.handle, CURLOPT_READFUNCTION, read_proxy as *mut libc::c_void);
+            curl_easy_setopt(self.handle, CURLOPT_READDATA, &mut self.as_mut().get_unchecked_mut().data_to_send);
+            curl_easy_setopt(self.handle, CURLOPT_WRITEFUNCTION, write_proxy as *mut libc::c_void);
+            curl_easy_setopt(self.handle, CURLOPT_WRITEDATA, &mut self.as_mut().get_unchecked_mut().data_received);
             curl_easy_setopt(self.handle, CURLOPT_NOPROGRESS, 1 as libc::c_long);
             curl_easy_setopt(self.handle, CURLOPT_VERBOSE, 0 as libc::c_long);
             curl_easy_setopt(self.handle, CURLOPT_UPLOAD, 0 as libc::c_long);
             curl_easy_setopt(self.handle, CURLOPT_CUSTOMREQUEST, std::ptr::null::<libc::c_char>());
-            curl_easy_setopt(self.handle, CURLOPT_ERRORBUFFER, self.curl_error.as_mut_ptr());
+            curl_easy_setopt(self.handle, CURLOPT_ERRORBUFFER, self.as_mut().get_unchecked_mut().curl_error.as_mut_ptr());
         }
     }
 
@@ -117,8 +152,22 @@ impl HttpResponseData {
                 HttpMethod::Delete => curl_easy_setopt(self.handle, CURLOPT_CUSTOMREQUEST, HTTP_METHOD_DELETE.as_ptr()),
             };
 
-            self.url_cstring = CString::new(request.url.clone()).unwrap();
+            self.as_mut().get_unchecked_mut().url_cstring = CString::new(request.url.clone()).unwrap();
             curl_easy_setopt(self.handle, CURLOPT_URL, self.url_cstring.as_ptr());
+        }
+    }
+
+    fn set_completed(self: Pin<&mut Self>) {
+        self.completion.signal();
+    }
+
+    fn get_completion_waiter(self: Pin<&Self>) -> AsyncSignal {
+        self.completion.clone()
+    }
+
+    fn take_data_received(mut self: Pin<&mut Self>) -> Vec<u8> {
+        unsafe {
+            std::mem::take(&mut self.as_mut().get_unchecked_mut().data_received)
         }
     }
 }
@@ -190,32 +239,34 @@ enum IOEvent {
 }
 
 #[derive(Debug)]
-struct PollerData {
+struct HttpClientData {
+    multi_handle: *mut CURLM,   // owned by HttpPinnedData
     timer_epoch: u64,
     timer_op: Option<(u64, usize)>,
     io_events_tx: AsyncChannelTx<IOEvent>,
     io_events_rx: AsyncChannelRx<IOEvent>,
+    responses: Vec<HttpResponse>,
 }
 
-impl Default for PollerData {
-    fn default() -> Self {
+impl HttpClientData {
+    fn new(multi_handle: *mut CURLM) -> Self {
         let (rx, tx) = async_channel_create();
-        Self { timer_epoch: 0, timer_op: None, io_events_rx: rx, io_events_tx: tx }
+        Self { multi_handle, timer_epoch: 0, timer_op: None, io_events_rx: rx, io_events_tx: tx, responses: vec![] }
     }
 }
 
 #[derive(Debug, Clone)]
-struct PollerDataPtr {
-    ptr: Rc<RefCell<PollerData>>,
+struct HttpClientDataPtr {
+    ptr: Rc<RefCell<HttpClientData>>,
 }
 
-impl Default for PollerDataPtr {
-    fn default() -> Self {
-        Self { ptr: Rc::new(RefCell::new(PollerData::default())) }
+impl HttpClientDataPtr {
+    fn new(multi_handle: *mut CURLM) -> Self {
+        Self { ptr: Rc::new(RefCell::new(HttpClientData::new(multi_handle))) }
     }
 }
 
-impl PollerDataPtr {
+impl HttpClientDataPtr {
     fn get_new_epoch(&self) -> u64 {
         self.ptr.borrow_mut().timer_epoch += 1;
         self.ptr.borrow().timer_epoch
@@ -248,17 +299,76 @@ impl PollerDataPtr {
     fn push_event(&self, event: IOEvent) {
         self.ptr.borrow_mut().io_events_tx.send(event);
     }
+
+    fn add_response(&self, response: HttpResponse) {
+        self.ptr.borrow_mut().responses.push(response);
+    }
+
+    fn take_all_responses(&self) -> Vec<HttpResponse> {
+        std::mem::take(&mut self.ptr.borrow_mut().responses)
+    }
+
+    async fn wait_for_event(&self) -> IOEvent {
+        // clone is to avoid holding borrow across suspension point
+        let mut rx = self.ptr.borrow_mut().io_events_rx.clone();
+        rx.receive().await
+    }
+
+    fn multi_handle(&self) -> *mut CURLM {
+        self.ptr.borrow().multi_handle
+    }
+
+    unsafe fn complete_requests(&self) {
+        loop {
+            let mut msg_in_queue: i32 = 0;
+            let info = curl_multi_info_read(self.multi_handle(), &mut msg_in_queue);
+            let info = match info.is_null() {
+                true => break,
+                false => &*info,
+            };
+
+            if info.msg == CURLMSG_DONE {
+                let easy = info.easy_handle;
+                let mut inner = self.ptr.borrow_mut();
+                let found = inner.responses.iter_mut().position(|r| r.easy_handle() == easy);
+
+                match (found, info.data.result as u32) {
+                    (None, _) => {
+                        curl_multi_remove_handle(inner.multi_handle, easy);
+                    },
+                    (Some(idx), CURLE_OK) => {
+                        let response = inner.responses.remove(idx);
+                        response.complete_request();
+
+                        curl_multi_remove_handle(inner.multi_handle, easy);
+                    },
+                    (Some(idx), _) => {
+                        let response = inner.responses.remove(idx);
+                        response.fail_request();
+
+                        curl_multi_remove_handle(inner.multi_handle, easy);
+                    },
+                }
+            }
+        }
+    }
+
+    unsafe fn fail_all_requests(&self) {
+        self.take_all_responses().into_iter().for_each(|r| {
+            r.fail_request();
+            curl_multi_remove_handle(self.multi_handle(), r.easy_handle());
+        });
+    }
 }
 
-struct HttpClientData {
+struct HttpPinnedData {
     multi_handle: *mut CURLM,
-    responses: Vec<HttpResponse>,
-    poller: PollerDataPtr,
+    poller: HttpClientDataPtr,
     event_processor: TaskHandle<()>,
     _pin: PhantomPinned,
 }
 
-impl HttpClientData {
+impl HttpPinnedData {
     fn new() -> Result<Self, ()> {
         let curl = unsafe { curl_multi_init() };
         if curl.is_null() {
@@ -267,8 +377,7 @@ impl HttpClientData {
 
         Ok(Self {
             multi_handle: curl,
-            responses: Vec::new(),
-            poller: PollerDataPtr::default(),
+            poller: HttpClientDataPtr::new(curl),
             event_processor: TaskHandle::default(),
             _pin: PhantomPinned,
         })
@@ -276,7 +385,7 @@ impl HttpClientData {
 
     fn init(mut self: Pin<&mut Self>) {
         unsafe {
-            let this = self.as_mut().get_unchecked_mut() as *mut HttpClientData as *mut libc::c_void;
+            let this = self.as_mut().get_unchecked_mut() as *mut HttpPinnedData as *mut libc::c_void;
 
             curl_multi_setopt(self.multi_handle, CURLMOPT_SOCKETFUNCTION, socket_callback as *mut libc::c_void);
             curl_multi_setopt(self.multi_handle, CURLMOPT_SOCKETDATA, this);
@@ -287,39 +396,36 @@ impl HttpClientData {
             let multi_handle = self.multi_handle;
             self.as_mut().get_unchecked_mut().event_processor = async_spawn(async move {
                 loop {
-                    let event = poller.ptr.borrow_mut().io_events_rx.receive().await;
+                    let event = poller.wait_for_event().await;
                     match event {
                         IOEvent::FdReady(fd, read, write) => {
+                            // println!("IOEvent::FdReady event");
                             let mask = match (read, write) {
-                                (true, false) => CURL_CSELECT_IN,
-                                (false, true) => CURL_CSELECT_OUT,
-                                (true, true) => CURL_CSELECT_IN | CURL_CSELECT_IN,
+                                (true, false)   => CURL_CSELECT_IN,
+                                (false, true)   => CURL_CSELECT_OUT,
+                                (true, true)    => CURL_CSELECT_IN | CURL_CSELECT_IN,
                                 (_, _) => panic!("IO event false/false"),
                             };
 
                             let mut running: i32 = 0;
                             let error = curl_multi_socket_action(multi_handle, fd as u32, mask as i32, &mut running);
-                            assert_eq!(error, 0);
+                            match error as u32 {
+                                CURLE_OK    => poller.complete_requests(),
+                                _           => poller.fail_all_requests(),
+                            }
                         },
                         IOEvent::TimerFired => {
+                            // println!("IOEvent::TimerFired event");
                             let mut running: i32 = 0;
                             let error = curl_multi_socket_action(multi_handle, CURL_SOCKET_TIMEOUT as u32, 0, &mut running);
-                            assert_eq!(error, 0);
+                            match error as u32 {
+                                CURLE_OK    => poller.complete_requests(),
+                                _           => poller.fail_all_requests(),
+                            }
                         },
                     }
 
-                    loop {
-                        let mut msg_in_queue: i32 = 0;
-                        let maybe_msg = curl_multi_info_read(multi_handle, &mut msg_in_queue);
-                        let msg = match maybe_msg.is_null() {
-                            true => break,
-                            false => &*maybe_msg,
-                        };
 
-                        if msg.msg == CURLMSG_DONE {
-                            let easy = msg.easy_handle;
-                        }
-                    }
                 }
             });
         }
@@ -329,25 +435,16 @@ impl HttpClientData {
         let response = HttpResponse::new()?;
         response.setup(&request);
 
-        unsafe {
-            self.as_mut().get_unchecked_mut().responses.push(response.clone());
-        }
-
+        self.poller.add_response(response.clone());
         self.as_mut().attach(&response);
         self.as_mut().perform();
 
         Ok(response)
     }
 
-    fn attach(self: Pin<&mut Self>, request: &HttpResponse) {
+    fn attach(self: Pin<&mut Self>, response: &HttpResponse) {
         unsafe {
-            curl_multi_add_handle(self.multi_handle, request.easy_handle());
-        }
-    }
-
-    fn detach(self: Pin<&mut Self>, request: &HttpResponse) {
-        unsafe {
-            curl_multi_remove_handle(self.multi_handle, request.ptr.borrow().handle);
+            curl_multi_add_handle(self.multi_handle, response.easy_handle());
         }
     }
 
@@ -361,12 +458,12 @@ impl HttpClientData {
 
 }
 
-impl Drop for HttpClientData {
+impl Drop for HttpPinnedData {
     fn drop(&mut self) {
         unsafe {
             self.event_processor.cancel_by_ref();
 
-            self.responses.iter_mut().for_each(|e| {
+            self.poller.take_all_responses().iter_mut().for_each(|e| {
                 curl_multi_remove_handle(self.multi_handle, e.easy_handle());
             });
 
@@ -376,12 +473,12 @@ impl Drop for HttpClientData {
 }
 
 pub struct HttpClient {
-    ptr: Pin<Box<HttpClientData>>,
+    ptr: Pin<Box<HttpPinnedData>>,
 }
 
 impl HttpClient {
     pub fn new() -> Result<Self, ()>  {
-        let mut ptr = Box::pin(HttpClientData::new()?);
+        let mut ptr = Box::pin(HttpPinnedData::new()?);
         ptr.as_mut().init();
 
         Ok(Self { ptr })
@@ -394,15 +491,11 @@ impl HttpClient {
     fn attach(&mut self, request: &HttpResponse) {
         self.ptr.as_mut().attach(request)
     }
-
-    fn detach(&mut self, request: &HttpResponse) {
-        self.ptr.as_mut().detach(request)
-    }
 }
 
 unsafe extern "C" fn socket_callback(_curl: *mut CURL, sockfd: curl_socket_t, what: libc::c_int, userp: *mut libc::c_void, sockp: *mut libc::c_void) -> libc::c_int {
-    println!("socket callback {} {}", sockfd, what);
-    let client = &mut *(userp as *mut HttpClientData);
+    // println!("socket callback {} {}", sockfd, what);
+    let client = &mut *(userp as *mut HttpPinnedData);
 
     let socket = match sockp.is_null() {
         true => {
@@ -433,8 +526,7 @@ unsafe extern "C" fn socket_callback(_curl: *mut CURL, sockfd: curl_socket_t, wh
 }
 
 unsafe extern "C" fn timer_callback(_: *mut CURLM, timeout_ms: libc::c_long, sockp: *mut libc::c_void) -> libc::c_int {
-    println!("timer callback {}", timeout_ms);
-    let client = &mut *(sockp as *mut HttpClientData);
+    let client = &mut *(sockp as *mut HttpPinnedData);
 
     let seconds = timeout_ms * 1_000_000 / 1_000_000_000;
     let nanoseconds = timeout_ms * 1_000_000 % 1_000_000_000;
@@ -472,7 +564,7 @@ unsafe fn poll_cleanup(mut socket: Box<SocketData>) {
     }
 }
 
-unsafe fn poll_socket(poller: PollerDataPtr, socket: &mut SocketData, wanted: PollMask) {
+unsafe fn poll_socket(poller: HttpClientDataPtr, socket: &mut SocketData, wanted: PollMask) {
     let socket_ptr = socket as *mut SocketData;
     if !socket.need_update() {
         return;
@@ -480,6 +572,7 @@ unsafe fn poll_socket(poller: PollerDataPtr, socket: &mut SocketData, wanted: Po
 
     // Op is in flight, save desired state for later
     if socket.change_in_flight() {
+        // println!("poll socket - change in flight");
         socket.set_wanted(wanted);
         return;
     }
@@ -487,6 +580,7 @@ unsafe fn poll_socket(poller: PollerDataPtr, socket: &mut SocketData, wanted: Po
     // Poll removal
     if wanted.empty() {
         if let Some(token) = socket.take_poll_op() {
+            // println!("poll socket - poll removal - op in flight, canceling");
             socket.set_change_in_flight(true);
 
             async_cancel(token).schedule(move |_| {
@@ -495,6 +589,8 @@ unsafe fn poll_socket(poller: PollerDataPtr, socket: &mut SocketData, wanted: Po
                 socket.clear_poll_op();
                 socket.set_change_in_flight(false);
             });
+        } else {
+            // println!("poll socket - poll removal, no op in flight");
         }
 
         return;
@@ -503,6 +599,7 @@ unsafe fn poll_socket(poller: PollerDataPtr, socket: &mut SocketData, wanted: Po
     match socket.get_poll_op() {
         None => {
             // Poll add
+            // println!("poll socket - poll add");
             socket.set_armed(wanted);
             let poller_ptr = poller.clone();
             let token = async_poll(&socket.fd(), wanted).schedule(move |result| {
@@ -523,6 +620,7 @@ unsafe fn poll_socket(poller: PollerDataPtr, socket: &mut SocketData, wanted: Po
         },
         Some(token) => {
             // Poll update
+            // println!("poll socket - poll update");
             socket.set_change_in_flight(true);
             socket.set_wanted(wanted);
 
@@ -546,19 +644,22 @@ unsafe fn poll_socket(poller: PollerDataPtr, socket: &mut SocketData, wanted: Po
     }
 }
 
-fn schedule_timeout(poller: PollerDataPtr, seconds: i64, nanoseconds: i64) {
+fn schedule_timeout(poller: HttpClientDataPtr, seconds: i64, nanoseconds: i64) {
     let epoch = poller.get_new_epoch();
 
     // timer removal
-    if seconds < 0 {
+    if seconds < 0 || nanoseconds < 0 {
+        // println!("schedule_timeout - clear timer");
         if let Some(op_token) = poller.take_current_op() {
             async_cancel(op_token).schedule(|_|{});
-            return;
         }
+
+        return;
     }
 
     // no timeout - call now
     if seconds == 0 && nanoseconds == 0 {
+        // println!("schedule_timeout - instant timer");
         poller.push_event(IOEvent::TimerFired);
         return;
     }
@@ -566,6 +667,7 @@ fn schedule_timeout(poller: PollerDataPtr, seconds: i64, nanoseconds: i64) {
     // real timer setup
     match poller.get_current_op() {
         None => {
+            // println!("schedule_timeout - new op {} {}", seconds, nanoseconds);
             let poller_ptr = poller.clone();
             let token = async_sleep_with_result(Duration::new(seconds as u64, nanoseconds as u32)).schedule(move |result| {
                 poller_ptr.clear_current_op();
@@ -584,8 +686,9 @@ fn schedule_timeout(poller: PollerDataPtr, seconds: i64, nanoseconds: i64) {
         },
         Some(token) => {
             poller.dec_epoch();
-
+            // println!("schedule_timeout - update op {} {}", seconds, nanoseconds);
             async_sleep_update(token, Duration::new(seconds as u64, nanoseconds as u32)).schedule(move|result| {
+                // println!("schedule_timeout - update result {:?}", result);
                 if result.is_ok() {
                     return;
                 }
@@ -599,6 +702,8 @@ fn schedule_timeout(poller: PollerDataPtr, seconds: i64, nanoseconds: i64) {
 
 #[cfg(test)]
 mod tests {
+    use crate::async_run;
+
     use super::*;
 
     #[test]
@@ -609,10 +714,13 @@ mod tests {
 
     #[test]
     fn http_client_request() {
-        let mut client = HttpClient::new().unwrap();
-        let mut request = HttpRequest::new();
-        request.url = String::from("http://www.onet.pl");
+        async_run(async move {
+            let mut client = HttpClient::new().unwrap();
+            let mut request = HttpRequest::new();
+            request.url = String::from("http://www.onet.pl");
 
-        let response = client.execute(request).unwrap();
+            let response = client.execute(request).unwrap();
+            let r = response.wait_for_completion().await;
+        });
     }
 }
