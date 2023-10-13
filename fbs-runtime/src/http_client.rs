@@ -876,6 +876,7 @@ unsafe fn poll_socket(poller: HttpClientDataPtr, socket: Rc<SocketData>, wanted:
             // Poll add
             // println!("poll socket - poll add");
             socket.set_wanted(wanted);
+            socket.set_armed(wanted);
             let poller_ptr = poller.clone();
 
             let socket_data = socket.clone();
