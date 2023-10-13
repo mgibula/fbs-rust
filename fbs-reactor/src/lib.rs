@@ -455,7 +455,7 @@ impl Reactor {
                             false => CQE_INVALID,
                         };
 
-                        io_uring_prep_poll_update(sqe.ptr, user_data, user_data, mask.into(), IORING_POLL_UPDATE_EVENTS);
+                        io_uring_prep_poll_update(sqe.ptr, user_data, 0, mask.into(), IORING_POLL_UPDATE_EVENTS);
                     },
                     IOUringOp::InProgress(_) => panic!("op already scheduled"),
                 }
