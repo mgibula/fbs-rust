@@ -400,6 +400,7 @@ struct SocketData
     wanted: Cell<PollMask>,
     change_in_flight: Cell<bool>,
     poll_op: Cell<Option<(u64, usize)>>,
+    dead: Cell<bool>,
 }
 
 impl SocketData {
@@ -449,6 +450,14 @@ impl SocketData {
 
     fn clear_poll_op(&self) {
         self.poll_op.set(None);
+    }
+
+    fn is_dead(&self) -> bool {
+        self.dead.get()
+    }
+
+    fn mark_dead(&self) {
+        self.dead.set(true);
     }
 }
 
@@ -546,7 +555,6 @@ impl HttpClientDataPtr {
                 true => break,
                 false => &*info,
             };
-
             if info.msg == CURLMSG_DONE {
                 let easy = info.easy_handle;
                 let mut inner = self.ptr.borrow_mut();
@@ -666,8 +674,6 @@ impl HttpPinnedData {
                             }
                         },
                     }
-
-
                 }
             });
         }
@@ -747,7 +753,6 @@ impl HttpClient {
 }
 
 unsafe extern "C" fn socket_callback(_curl: *mut CURL, sockfd: curl_socket_t, what: libc::c_int, userp: *mut libc::c_void, sockp: *mut libc::c_void) -> libc::c_int {
-    // println!("socket callback {} {}", sockfd, what);
     let client = &mut *(userp as *mut HttpPinnedData);
 
     let socket = match sockp.is_null() {
@@ -786,6 +791,7 @@ unsafe extern "C" fn socket_callback(_curl: *mut CURL, sockfd: curl_socket_t, wh
                 eprintln!("Error in curl_multi_remove_handle: {}", curlm_code_to_error(code));
             }
 
+            socket.mark_dead();
             poll_cleanup(socket);
             return 0;
         },
@@ -830,12 +836,13 @@ unsafe extern "C" fn write_proxy(ptr: *mut libc::c_char, size: libc::size_t, nme
 
 unsafe fn poll_cleanup(socket: Rc<SocketData>) {
     if let Some(token) = socket.take_poll_op() {
-        async_cancel(token).schedule(move |_|{});
+        async_cancel(token).schedule(move |_| {});
     }
 }
 
 unsafe fn poll_socket(poller: HttpClientDataPtr, socket: Rc<SocketData>, wanted: PollMask) {
     if !socket.need_update(wanted) {
+        // println!("poll_socket - no update needed");
         return;
     }
 
@@ -868,12 +875,16 @@ unsafe fn poll_socket(poller: HttpClientDataPtr, socket: Rc<SocketData>, wanted:
         None => {
             // Poll add
             // println!("poll socket - poll add");
-            socket.set_armed(wanted);
+            socket.set_wanted(wanted);
             let poller_ptr = poller.clone();
 
             let socket_data = socket.clone();
             let token = async_poll(&socket.fd(), wanted).schedule(move |result| {
-                match result {
+                if socket_data.is_dead() {
+                    return;
+                }
+
+                match &result {
                     Ok(mask) => poller_ptr.push_event(IOEvent::FdReady(socket_data.fd(), (mask & libc::POLLIN as i32) != 0, (mask & libc::POLLOUT as i32) != 0)),
                     Err(error) if error.cancelled() => (),
                     Err(error) => panic!("Poll operation for fd {} returned {}", socket_data.fd(), error),
@@ -882,8 +893,10 @@ unsafe fn poll_socket(poller: HttpClientDataPtr, socket: Rc<SocketData>, wanted:
                 socket_data.set_armed(PollMask::default());
                 socket_data.clear_poll_op();
 
-                let wanted = socket_data.wanted();
-                poll_socket(poller.clone(), socket_data, wanted);
+                if result.is_ok() {
+                    let wanted = socket_data.wanted();
+                    poll_socket(poller.clone(), socket_data, wanted);
+                }
             });
 
             socket.set_poll_op(token);
@@ -896,6 +909,10 @@ unsafe fn poll_socket(poller: HttpClientDataPtr, socket: Rc<SocketData>, wanted:
 
             let socket_data = socket.clone();
             async_poll_update(token, wanted).schedule(move |result| {
+                if socket_data.is_dead() {
+                    return;
+                }
+
                 socket_data.set_change_in_flight(false);
                 match result {
                     Ok(_) => {
