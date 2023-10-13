@@ -2,6 +2,7 @@ use std::os::fd::IntoRawFd;
 use std::{ffi::CString, mem::ManuallyDrop};
 use std::time::Duration;
 use std::alloc::Layout;
+use std::fmt::{Debug, Formatter};
 
 use liburing_sys::*;
 use io_uring::*;
@@ -272,6 +273,19 @@ pub struct Reactor {
     uncommited: u32,
     rop_cache: Vec<ReactorOpPtr>,
     seq: u64,
+}
+
+impl Debug for Reactor {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Reactor")
+            .field("ops", &self.ops.len())
+            .field("ops_free_entries", &self.ops_free_entries.len())
+            .field("in_flight", &self.in_flight)
+            .field("uncommited", &self.uncommited)
+            .field("rop_cache", &self.rop_cache.len())
+            .field("seq", &self.seq)
+            .finish()
+    }
 }
 
 impl Reactor {
