@@ -1,5 +1,6 @@
 use std::ffi::CString;
 use std::ffi::CStr;
+use std::ffi::NulError;
 use std::marker::PhantomPinned;
 use std::rc::Rc;
 use std::cell::{Cell, RefCell};
@@ -14,10 +15,21 @@ use super::ops::{async_sleep_with_result, async_sleep_update, async_cancel, asyn
 use fbs_executor::TaskHandle;
 use fbs_library::poll::PollMask;
 
+use thiserror::Error;
 use libcurl_sys::*;
 
 const_cstr! {
     HTTP_METHOD_DELETE = "DELETE";
+}
+
+#[derive(Error, Debug)]
+pub enum HttpClientError {
+    #[error("CURL error while creating context")]
+    CurlInitError,
+    #[error("CURL runtime error")]
+    CurlError(u32, String),
+    #[error("Invalid characters in input")]
+    InputNullError(#[from] NulError),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -55,16 +67,16 @@ pub struct HttpResponse {
 }
 
 impl HttpResponse {
-    fn new() -> Result<Self, ()> {
+    fn new() -> Result<Self, HttpClientError> {
         let result = Self {
             ptr: Rc::new(RefCell::new(Box::pin(HttpResponseInner::new()?))),
         };
 
-        result.ptr.borrow_mut().as_mut().init();
+        result.ptr.borrow_mut().as_mut().init()?;
         Ok(result)
     }
 
-    fn setup(&self, request: &HttpRequest) {
+    fn setup(&self, request: &HttpRequest) -> Result<(), HttpClientError> {
         self.ptr.borrow_mut().as_mut().setup(request)
     }
 
@@ -125,11 +137,11 @@ impl Drop for HttpResponseInner {
 }
 
 impl HttpResponseInner {
-    pub fn new() -> Result<Self, ()> {
+    pub fn new() -> Result<Self, HttpClientError> {
         unsafe {
             let handle = curl_easy_init();
             if handle.is_null() {
-                return Err(());
+                return Err(HttpClientError::CurlInitError);
             }
 
             Ok(Self {
@@ -145,7 +157,7 @@ impl HttpResponseInner {
         }
     }
 
-    fn init(mut self: Pin<&mut Self>) {
+    fn init(mut self: Pin<&mut Self>) -> Result<(), HttpClientError> {
         unsafe {
             curl_easy_setopt(self.handle, CURLOPT_READFUNCTION, read_proxy as *mut libc::c_void);
             curl_easy_setopt(self.handle, CURLOPT_READDATA, &mut self.as_mut().get_unchecked_mut().data_to_send);
@@ -157,9 +169,11 @@ impl HttpResponseInner {
             curl_easy_setopt(self.handle, CURLOPT_CUSTOMREQUEST, std::ptr::null::<libc::c_char>());
             curl_easy_setopt(self.handle, CURLOPT_ERRORBUFFER, self.as_mut().get_unchecked_mut().curl_error.as_mut_ptr());
         }
+
+        Ok(())
     }
 
-    fn setup(mut self: Pin<&mut Self>, request: &HttpRequest) {
+    fn setup(mut self: Pin<&mut Self>, request: &HttpRequest) -> Result<(), HttpClientError> {
         unsafe {
             match request.method {
                 HttpMethod::Get => curl_easy_setopt(self.handle, CURLOPT_HTTPGET, 1 as libc::c_long),
@@ -168,7 +182,7 @@ impl HttpResponseInner {
                 HttpMethod::Delete => curl_easy_setopt(self.handle, CURLOPT_CUSTOMREQUEST, HTTP_METHOD_DELETE.as_ptr()),
             };
 
-            self.as_mut().get_unchecked_mut().url_cstring = CString::new(request.url.clone()).expect("NULL characters inside URL");
+            self.as_mut().get_unchecked_mut().url_cstring = CString::new(request.url.clone())?;
             curl_easy_setopt(self.handle, CURLOPT_URL, self.url_cstring.as_ptr());
 
             let headers = request.headers.iter().fold(std::ptr::null_mut(), |list, pair| {
@@ -191,6 +205,7 @@ impl HttpResponseInner {
             self.as_mut().get_unchecked_mut().headers = headers;
 
             curl_easy_setopt(self.handle, CURLOPT_FOLLOWLOCATION, request.follow_redirects as libc::c_long);
+            Ok(())
         }
     }
 
@@ -437,10 +452,10 @@ struct HttpPinnedData {
 }
 
 impl HttpPinnedData {
-    fn new() -> Result<Self, ()> {
+    fn new() -> Result<Self, HttpClientError> {
         let curl = unsafe { curl_multi_init() };
         if curl.is_null() {
-            return Err(());
+            return Err(HttpClientError::CurlInitError);
         }
 
         Ok(Self {
@@ -499,9 +514,9 @@ impl HttpPinnedData {
         }
     }
 
-    pub fn execute(mut self: Pin<&mut Self>, request: HttpRequest) -> Result<HttpResponse, ()> {
+    pub fn execute(mut self: Pin<&mut Self>, request: HttpRequest) -> Result<HttpResponse, HttpClientError> {
         let response = HttpResponse::new()?;
-        response.setup(&request);
+        response.setup(&request)?;
 
         self.poller.add_response(response.clone());
         self.as_mut().attach(&response);
@@ -545,19 +560,15 @@ pub struct HttpClient {
 }
 
 impl HttpClient {
-    pub fn new() -> Result<Self, ()>  {
+    pub fn new() -> Result<Self, HttpClientError>  {
         let mut ptr = Box::pin(HttpPinnedData::new()?);
         ptr.as_mut().init();
 
         Ok(Self { ptr })
     }
 
-    pub fn execute(&mut self, request: HttpRequest) -> Result<HttpResponse, ()> {
+    pub fn execute(&mut self, request: HttpRequest) -> Result<HttpResponse, HttpClientError> {
         self.ptr.as_mut().execute(request)
-    }
-
-    fn attach(&mut self, request: &HttpResponse) {
-        self.ptr.as_mut().attach(request)
     }
 }
 
@@ -725,6 +736,10 @@ unsafe fn poll_socket(poller: HttpClientDataPtr, socket: Rc<SocketData>, wanted:
             });
         }
     }
+}
+
+unsafe fn curl_easy_set_option() {
+    
 }
 
 fn schedule_timeout(poller: HttpClientDataPtr, seconds: i64, nanoseconds: i64) {
