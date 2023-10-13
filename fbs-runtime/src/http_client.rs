@@ -33,6 +33,7 @@ pub struct HttpRequest {
     pub method: HttpMethod,
     pub url: String,
     pub headers: HashMap<String, String>,
+    pub follow_redirects: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -44,7 +45,7 @@ pub struct HttpResponseData {
 
 impl HttpRequest {
     pub fn new() -> Self {
-        Self { method: HttpMethod::Get, url: String::new(), headers: HashMap::new() }
+        Self { method: HttpMethod::Get, url: String::new(), headers: HashMap::new(), follow_redirects: false }
     }
 }
 
@@ -87,7 +88,7 @@ impl HttpResponse {
         let buffer = std::mem::take(&mut self.ptr.borrow_mut().as_mut().take_data_received());
 
         let mut result = HttpResponseData { http_code: 0, response_body: buffer, headers: HashMap::new() };
-        self.ptr.borrow_mut().as_mut().fill_response_data(&mut result);
+        self.ptr.borrow().as_ref().fill_response_data(&mut result);
 
         result
     }
@@ -188,6 +189,8 @@ impl HttpResponseInner {
             }
 
             self.as_mut().get_unchecked_mut().headers = headers;
+
+            curl_easy_setopt(self.handle, CURLOPT_FOLLOWLOCATION, request.follow_redirects as libc::c_long);
         }
     }
 
@@ -205,7 +208,7 @@ impl HttpResponseInner {
         }
     }
 
-    fn fill_response_data(mut self: Pin<&mut Self>, data: &mut HttpResponseData) {
+    fn fill_response_data(self: Pin<&Self>, data: &mut HttpResponseData) {
         unsafe {
             let mut code: libc::c_long = 0;
             curl_easy_getinfo(self.handle, CURLINFO_RESPONSE_CODE, &mut code);
