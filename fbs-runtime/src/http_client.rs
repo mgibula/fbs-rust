@@ -27,11 +27,13 @@ pub enum HttpClientError {
     #[error("CURL error while creating context")]
     CurlInitError,
     #[error("CURL-multi runtime error")]
-    CurlMultiError(u32, String),
+    CurlMultiError(i32, String),
     #[error("CURL-easy runtime error")]
     CurlError(u32, String),
     #[error("Invalid characters in input")]
     InputNullError(#[from] NulError),
+    #[error("Request error")]
+    RequestError(String),
 }
 
 enum EasyOption<'opt> {
@@ -111,24 +113,19 @@ impl HttpResponse {
     }
 
     fn complete_request(&self) {
-        self.ptr.borrow_mut().as_mut().set_completed();
+        self.ptr.borrow_mut().as_mut().set_completed(true);
     }
 
     fn fail_request(&self) {
-        self.ptr.borrow_mut().as_mut().set_completed();
+        self.ptr.borrow_mut().as_mut().set_completed(false);
     }
 
-    pub async fn wait_for_completion(self) -> HttpResponseData {
+    pub async fn wait_for_completion(self) -> Result<HttpResponseData, HttpClientError> {
         // clone is to avoid holding borrow across suspension point
         let waiter = self.ptr.borrow().as_ref().get_completion_waiter();
         waiter.await;
 
-        let buffer = std::mem::take(&mut self.ptr.borrow_mut().as_mut().take_data_received());
-
-        let mut result = HttpResponseData { http_code: 0, response_body: buffer, headers: HashMap::new() };
-        self.ptr.borrow().as_ref().fill_response_data(&mut result);
-
-        result
+        self.ptr.borrow_mut().as_mut().get_result()
     }
 }
 
@@ -146,6 +143,7 @@ struct HttpResponseInner {
     curl_error: [u8; CURL_ERROR_SIZE as usize],
     url_cstring: CString,
     completion: AsyncSignal,
+    error: Option<String>,
     headers: *mut curl_slist,
     _pin: PhantomPinned,
 }
@@ -178,6 +176,7 @@ impl HttpResponseInner {
                 url_cstring: CString::default(),
                 completion: AsyncSignal::new(),
                 headers: std::ptr::null_mut(),
+                error: None,
                 _pin: PhantomPinned,
             })
         }
@@ -302,17 +301,62 @@ impl HttpResponseInner {
         }
     }
 
-    fn set_completed(self: Pin<&mut Self>) {
+    fn set_completed(mut self: Pin<&mut Self>, is_success: bool) {
         self.completion.signal();
+
+        if !is_success {
+            unsafe {
+                self.as_mut().get_unchecked_mut().error = Some(self.error_string());
+            }
+        }
     }
 
     fn get_completion_waiter(self: Pin<&Self>) -> AsyncSignal {
         self.completion.clone()
     }
 
-    fn take_data_received(mut self: Pin<&mut Self>) -> Vec<u8> {
+    fn get_result(self: Pin<&mut Self>) -> Result<HttpResponseData, HttpClientError> {
+        match &self.as_ref().error {
+            Some(error) => Err(self.as_ref().get_error_result(error)),
+            None => Ok(self.get_ok_result()),
+        }
+    }
+
+    fn get_error_result(self: Pin<&Self>, error: &String) -> HttpClientError {
+        HttpClientError::RequestError(error.clone())
+    }
+
+    fn get_ok_result(mut self: Pin<&mut Self>) -> HttpResponseData {
         unsafe {
-            std::mem::take(&mut self.as_mut().get_unchecked_mut().data_received)
+            let mut result = HttpResponseData { http_code: 0, headers: HashMap::new(), response_body: std::mem::take(&mut self.as_mut().get_unchecked_mut().data_received) };
+
+            let mut code: libc::c_long = 0;
+            curl_easy_getinfo(self.handle, CURLINFO_RESPONSE_CODE, &mut code);
+
+            let mut prev_header = std::ptr::null_mut::<curl_header>();
+            loop {
+                let header = curl_easy_nextheader(self.handle, CURLH_HEADER, -1, prev_header);
+                if header.is_null() {
+                    break;
+                }
+
+                let key = CStr::from_ptr((*header).name).to_str();
+                let value = CStr::from_ptr((*header).value).to_str();
+
+                prev_header = header;
+                match (key, value) {
+                    (Ok(key), Ok(value)) => {
+                        result.headers.insert(key.to_owned(), value.to_owned());
+                    },
+                    (_, _) => {
+                        eprintln!("Invalid characters in header name or value, skipping");
+                        continue;
+                    },
+                }
+            }
+
+            result.http_code = code as i32;
+            result
         }
     }
 
@@ -577,7 +621,7 @@ impl HttpPinnedData {
 
         match error {
             CURLM_OK => Ok(()),
-            error => Err(HttpClientError::CurlMultiError(error as u32, curlm_code_to_error(error)))
+            error => Err(HttpClientError::CurlMultiError(error, curlm_code_to_error(error)))
         }
     }
 
@@ -636,23 +680,30 @@ impl HttpPinnedData {
         response.setup(&request)?;
 
         self.poller.add_response(response.clone());
-        self.as_mut().attach(&response);
-        self.as_mut().perform();
+        self.as_mut().attach(&response)?;
+        self.as_mut().perform()?;
 
         Ok(response)
     }
 
-    fn attach(self: Pin<&mut Self>, response: &HttpResponse) {
+    fn attach(self: Pin<&mut Self>, response: &HttpResponse) -> Result<(), HttpClientError> {
         unsafe {
-            curl_multi_add_handle(self.multi_handle, response.easy_handle());
+            let code = curl_multi_add_handle(self.multi_handle, response.easy_handle());
+            match code {
+                CURLM_OK => Ok(()),
+                code => Err(HttpClientError::CurlMultiError(code, curlm_code_to_error(code)))
+            }
         }
     }
 
-    fn perform(self: Pin<&mut Self>) -> libc::c_int {
+    fn perform(self: Pin<&mut Self>) -> Result<(), HttpClientError> {
         unsafe {
             let mut still_running: libc::c_int = 0;
-            curl_multi_perform(self.multi_handle, &mut still_running);
-            still_running
+            let code = curl_multi_perform(self.multi_handle, &mut still_running);
+            match code {
+                CURLM_OK => Ok(()),
+                code => Err(HttpClientError::CurlMultiError(code, curlm_code_to_error(code)))
+            }
         }
     }
 
@@ -664,10 +715,16 @@ impl Drop for HttpPinnedData {
             self.event_processor.cancel_by_ref();
 
             self.poller.take_all_responses().iter_mut().for_each(|e| {
-                curl_multi_remove_handle(self.multi_handle, e.easy_handle());
+                let code = curl_multi_remove_handle(self.multi_handle, e.easy_handle());
+                if code != CURLM_OK {
+                    eprintln!("Error in curl_multi_remove_handle: {}", curlm_code_to_error(code));
+                }
             });
 
-            curl_multi_cleanup(self.multi_handle);
+            let code = curl_multi_cleanup(self.multi_handle);
+            if code != CURLM_OK {
+                eprintln!("Error in curl_multi_cleanup: {}", curlm_code_to_error(code));
+            }
         }
     }
 }
@@ -699,7 +756,11 @@ unsafe extern "C" fn socket_callback(_curl: *mut CURL, sockfd: curl_socket_t, wh
             socket.set_fd(sockfd as i32);
 
             // socket refcount is increased here, this is paired with CURL_POLL_REMOVE handler below
-            curl_multi_assign(client.multi_handle, sockfd, Rc::into_raw(socket.clone()) as *mut SocketData as *mut libc::c_void);
+            let code = curl_multi_assign(client.multi_handle, sockfd, Rc::into_raw(socket.clone()) as *mut SocketData as *mut libc::c_void);
+            if code != CURLM_OK {
+                eprintln!("Error in curl_multi_remove_handle: {}", curlm_code_to_error(code));
+            }
+
             socket
         },
         false => {
@@ -720,7 +781,11 @@ unsafe extern "C" fn socket_callback(_curl: *mut CURL, sockfd: curl_socket_t, wh
             }
 
             // documentation doesn't specify if socket specific data are cleared with CURL_POLL_REMOVE, so clear it manually
-            curl_multi_assign(client.multi_handle, sockfd, std::ptr::null_mut::<libc::c_void>());
+            let code = curl_multi_assign(client.multi_handle, sockfd, std::ptr::null_mut::<libc::c_void>());
+            if code != CURLM_OK {
+                eprintln!("Error in curl_multi_remove_handle: {}", curlm_code_to_error(code));
+            }
+
             poll_cleanup(socket);
             return 0;
         },
