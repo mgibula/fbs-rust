@@ -40,6 +40,10 @@ impl<T> ChannelRx<T> {
             backend: self.backend.clone(),
         }
     }
+
+    pub fn len(&self) -> usize {
+        self.backend.len()
+    }
 }
 
 impl<T> ChannelTx<T> {
@@ -59,6 +63,10 @@ impl<T> ChannelBackend<T> {
 
     pub fn receive(&self) -> Option<T> {
         self.messages.borrow_mut().pop_front()
+    }
+
+    pub fn len(&self) -> usize {
+        self.messages.borrow().len()
     }
 }
 

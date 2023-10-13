@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::task::{Context, Poll};
+use std::fmt::{Debug, Formatter};
 
 use super::TaskData;
 use super::IndexedList;
@@ -9,6 +10,16 @@ use super::ExecutorCmd;
 use super::Executor;
 use super::ExecutorFrontend;
 use super::channel_create;
+
+impl Debug for Executor {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Executor")
+            .field("ready", &self.ready.len())
+            .field("waiting", &self.waiting.size())
+            .field("channel", &self.channel.len())
+            .finish()
+    }
+}
 
 impl Executor {
     pub fn new() -> Self {
@@ -95,5 +106,4 @@ impl Executor {
         }
 
     }
-
 }
