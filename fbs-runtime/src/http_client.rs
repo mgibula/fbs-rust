@@ -32,6 +32,18 @@ pub enum HttpClientError {
     InputNullError(#[from] NulError),
 }
 
+enum EasyOption {
+    ReadFunction(unsafe fn(*mut libc::c_void, libc::size_t, libc::size_t, *mut libc::c_void) -> libc::size_t),
+    ReadFunctionData(*mut libc::c_void),
+    WriteFunction(unsafe fn(*mut libc::c_char, libc::size_t, libc::size_t, *mut libc::c_void) -> libc::size_t),
+    WriteFunctionData(*mut libc::c_void),
+    NoProgress(bool),
+    Verbose(bool),
+    Upload(bool),
+    CustomRequest(&'static CStr),
+    ErrorBuffer(*mut u8),
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum HttpMethod {
     Get,
@@ -157,6 +169,36 @@ impl HttpResponseInner {
         }
     }
 
+    fn error_string(&self) -> String {
+        let error = CStr::from_bytes_until_nul(&self.curl_error);
+        if let Ok(error) = error {
+            error.to_string_lossy().into_owned()
+        } else {
+            String::new()
+        }
+    }
+
+    unsafe fn set_option(&self, option: EasyOption) -> Result<(), HttpClientError> {
+        let error = match option {
+            EasyOption::ReadFunction(function) => {
+                curl_easy_setopt(self.handle, CURLOPT_READFUNCTION, function as *mut libc::c_void)
+            },
+            EasyOption::ReadFunctionData(data) => {
+                curl_easy_setopt(self.handle, CURLOPT_READDATA, data as *mut libc::c_void)
+            },
+            EasyOption::WriteFunction(function) => {
+                curl_easy_setopt(self.handle, CURLOPT_WRITEFUNCTION, function as *mut libc::c_void)
+            },
+            
+            _ => { 0 }
+        };
+
+        match error {
+            CURLE_OK => Ok(()),
+            error => Err(HttpClientError::CurlError(error, self.error_string()))
+        }
+    }
+    
     fn init(mut self: Pin<&mut Self>) -> Result<(), HttpClientError> {
         unsafe {
             curl_easy_setopt(self.handle, CURLOPT_READFUNCTION, read_proxy as *mut libc::c_void);
@@ -736,10 +778,6 @@ unsafe fn poll_socket(poller: HttpClientDataPtr, socket: Rc<SocketData>, wanted:
             });
         }
     }
-}
-
-unsafe fn curl_easy_set_option() {
-    
 }
 
 fn schedule_timeout(poller: HttpClientDataPtr, seconds: i64, nanoseconds: i64) {
