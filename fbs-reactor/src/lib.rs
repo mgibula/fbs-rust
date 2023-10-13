@@ -515,7 +515,7 @@ impl Reactor {
         result
     }
 
-    fn submit(&mut self) -> Result<i32, IoUringError> {
+    pub fn submit(&mut self) -> Result<i32, IoUringError> {
         let mut result = 0;
 
         if self.uncommited > 0 {

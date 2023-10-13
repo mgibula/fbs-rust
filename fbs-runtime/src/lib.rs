@@ -112,8 +112,8 @@ impl<T> AsyncValue<T> {
     }
 }
 
-// iouring request, result, auto-cancel flag
-pub struct AsyncOp<T: AsyncOpResult> (IOUringReq, Rc<Cell<AsyncValue<T::Output>>>, bool);
+// iouring request, result, auto-cancel flag, submit-immediately
+pub struct AsyncOp<T: AsyncOpResult> (IOUringReq, Rc<Cell<AsyncValue<T::Output>>>, bool, bool);
 
 impl<T: AsyncOpResult> Drop for AsyncOp<T> {
     fn drop(&mut self) {
@@ -148,7 +148,7 @@ impl<T: AsyncOpResult> AsyncOp<T> {
             timeout: None,
         };
 
-        Self(req, Rc::new(Cell::new(AsyncValue::InProgress)), false)
+        Self(req, Rc::new(Cell::new(AsyncValue::InProgress)), false, false)
     }
 
     pub fn schedule(mut self, handler: impl FnOnce(T::Output) + 'static) -> (u64, usize) {
@@ -159,8 +159,13 @@ impl<T: AsyncOpResult> AsyncOp<T> {
             });
         }));
 
+        let immediately = self.3;
         REACTOR.with(|r| {
-            r.borrow_mut().schedule_linked2(slice::from_mut(&mut &mut self.0))
+            r.borrow_mut().schedule_linked2(slice::from_mut(&mut &mut self.0));
+
+            if immediately {
+                r.borrow_mut().submit().expect("io_uring error");
+            }
         });
 
         match &self.0.op {
@@ -176,6 +181,11 @@ impl<T: AsyncOpResult> AsyncOp<T> {
 
     pub fn clear_timeout(mut self) -> Self {
         self.0.timeout = None;
+        self
+    }
+
+    pub fn submit_immediately(mut self, value: bool) -> Self {
+        self.3 = value;
         self
     }
 }
