@@ -26,22 +26,36 @@ const_cstr! {
 pub enum HttpClientError {
     #[error("CURL error while creating context")]
     CurlInitError,
-    #[error("CURL runtime error")]
+    #[error("CURL-multi runtime error")]
+    CurlMultiError(u32, String),
+    #[error("CURL-easy runtime error")]
     CurlError(u32, String),
     #[error("Invalid characters in input")]
     InputNullError(#[from] NulError),
 }
 
-enum EasyOption {
-    ReadFunction(unsafe fn(*mut libc::c_void, libc::size_t, libc::size_t, *mut libc::c_void) -> libc::size_t),
+enum EasyOption<'opt> {
+    ReadFunction(unsafe extern "C" fn(*mut libc::c_void, libc::size_t, libc::size_t, *mut libc::c_void) -> libc::size_t),
     ReadFunctionData(*mut libc::c_void),
-    WriteFunction(unsafe fn(*mut libc::c_char, libc::size_t, libc::size_t, *mut libc::c_void) -> libc::size_t),
+    WriteFunction(unsafe extern "C" fn(*mut libc::c_char, libc::size_t, libc::size_t, *mut libc::c_void) -> libc::size_t),
     WriteFunctionData(*mut libc::c_void),
     NoProgress(bool),
     Verbose(bool),
     Upload(bool),
-    CustomRequest(&'static CStr),
+    CustomRequest(Option<&'static CStr>),   // curl doc doesn't say if its necessary to keep value around
     ErrorBuffer(*mut u8),
+    HttpGet(bool),
+    HttpPost(bool),
+    Url(&'opt CStr),    // from curl doc: "The application does not have to keep the string around after setting this option."
+    Headers(*mut curl_slist),
+    FollowLocation(bool),
+}
+
+enum MultiOption {
+    SocketFunction(unsafe extern "C" fn(*mut CURL, curl_socket_t, libc::c_int, *mut libc::c_void, *mut libc::c_void) -> libc::c_int),
+    SocketFunctionData(*mut libc::c_void),
+    TimerFunction(unsafe extern "C" fn(*mut CURLM, libc::c_long, *mut libc::c_void) -> libc::c_int),
+    TimerFunctionData(*mut libc::c_void),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -84,7 +98,7 @@ impl HttpResponse {
             ptr: Rc::new(RefCell::new(Box::pin(HttpResponseInner::new()?))),
         };
 
-        result.ptr.borrow_mut().as_mut().init()?;
+        result.ptr.borrow().as_ref().init()?;
         Ok(result)
     }
 
@@ -178,7 +192,7 @@ impl HttpResponseInner {
         }
     }
 
-    unsafe fn set_option(&self, option: EasyOption) -> Result<(), HttpClientError> {
+    unsafe fn set_option(self: Pin<&Self>, option: EasyOption) -> Result<(), HttpClientError> {
         let error = match option {
             EasyOption::ReadFunction(function) => {
                 curl_easy_setopt(self.handle, CURLOPT_READFUNCTION, function as *mut libc::c_void)
@@ -189,8 +203,43 @@ impl HttpResponseInner {
             EasyOption::WriteFunction(function) => {
                 curl_easy_setopt(self.handle, CURLOPT_WRITEFUNCTION, function as *mut libc::c_void)
             },
-            
-            _ => { 0 }
+            EasyOption::WriteFunctionData(data) => {
+                curl_easy_setopt(self.handle, CURLOPT_WRITEDATA, data as *mut libc::c_void)
+            },
+            EasyOption::Upload(value) => {
+                curl_easy_setopt(self.handle, CURLOPT_UPLOAD, value as libc::c_long)
+            },
+            EasyOption::NoProgress(value) => {
+                curl_easy_setopt(self.handle, CURLOPT_NOPROGRESS, value as libc::c_long)
+            },
+            EasyOption::Verbose(value) => {
+                curl_easy_setopt(self.handle, CURLOPT_VERBOSE, value as libc::c_long)
+            },
+            EasyOption::CustomRequest(value) => {
+                if let Some(value) = value {
+                    curl_easy_setopt(self.handle, CURLOPT_CUSTOMREQUEST, value.as_ptr())
+                } else {
+                    curl_easy_setopt(self.handle, CURLOPT_CUSTOMREQUEST, std::ptr::null::<libc::c_char>())
+                }
+            },
+            EasyOption::ErrorBuffer(value) => {
+                curl_easy_setopt(self.handle, CURLOPT_ERRORBUFFER, value)
+            },
+            EasyOption::HttpGet(value) => {
+                curl_easy_setopt(self.handle, CURLOPT_HTTPGET, value as libc::c_long)
+            },
+            EasyOption::HttpPost(value) => {
+                curl_easy_setopt(self.handle, CURLOPT_HTTPPOST, value as libc::c_long)
+            },
+            EasyOption::Url(value) => {
+                curl_easy_setopt(self.handle, CURLOPT_URL, value.as_ptr())
+            },
+            EasyOption::FollowLocation(value) => {
+                curl_easy_setopt(self.handle, CURLOPT_FOLLOWLOCATION, value as libc::c_long)
+            },
+            EasyOption::Headers(ptr) => {
+                curl_easy_setopt(self.handle, CURLOPT_HTTPHEADER, ptr)
+            }
         };
 
         match error {
@@ -198,18 +247,21 @@ impl HttpResponseInner {
             error => Err(HttpClientError::CurlError(error, self.error_string()))
         }
     }
-    
-    fn init(mut self: Pin<&mut Self>) -> Result<(), HttpClientError> {
+
+    fn init(self: Pin<&Self>) -> Result<(), HttpClientError> {
         unsafe {
-            curl_easy_setopt(self.handle, CURLOPT_READFUNCTION, read_proxy as *mut libc::c_void);
-            curl_easy_setopt(self.handle, CURLOPT_READDATA, &mut self.as_mut().get_unchecked_mut().data_to_send);
-            curl_easy_setopt(self.handle, CURLOPT_WRITEFUNCTION, write_proxy as *mut libc::c_void);
-            curl_easy_setopt(self.handle, CURLOPT_WRITEDATA, &mut self.as_mut().get_unchecked_mut().data_received);
-            curl_easy_setopt(self.handle, CURLOPT_NOPROGRESS, 1 as libc::c_long);
-            curl_easy_setopt(self.handle, CURLOPT_VERBOSE, 0 as libc::c_long);
-            curl_easy_setopt(self.handle, CURLOPT_UPLOAD, 0 as libc::c_long);
-            curl_easy_setopt(self.handle, CURLOPT_CUSTOMREQUEST, std::ptr::null::<libc::c_char>());
-            curl_easy_setopt(self.handle, CURLOPT_ERRORBUFFER, self.as_mut().get_unchecked_mut().curl_error.as_mut_ptr());
+            use std::ptr::addr_of;
+
+            self.as_ref().set_option(EasyOption::ReadFunction(read_proxy))?;
+            self.as_ref().set_option(EasyOption::ReadFunctionData(addr_of!(self.as_ref().data_to_send).cast::<libc::c_void>().cast_mut()))?;
+            self.as_ref().set_option(EasyOption::WriteFunction(write_proxy))?;
+            self.as_ref().set_option(EasyOption::WriteFunctionData(addr_of!(self.as_ref().data_received).cast::<libc::c_void>().cast_mut()))?;
+
+            self.as_ref().set_option(EasyOption::NoProgress(true))?;
+            self.as_ref().set_option(EasyOption::Verbose(false))?;
+            self.as_ref().set_option(EasyOption::Upload(true))?;
+            self.as_ref().set_option(EasyOption::CustomRequest(None))?;
+            self.as_ref().set_option(EasyOption::ErrorBuffer(self.as_ref().curl_error.as_ptr().cast_mut()))?;
         }
 
         Ok(())
@@ -218,14 +270,14 @@ impl HttpResponseInner {
     fn setup(mut self: Pin<&mut Self>, request: &HttpRequest) -> Result<(), HttpClientError> {
         unsafe {
             match request.method {
-                HttpMethod::Get => curl_easy_setopt(self.handle, CURLOPT_HTTPGET, 1 as libc::c_long),
-                HttpMethod::Post => curl_easy_setopt(self.handle, CURLOPT_HTTPPOST, 1 as libc::c_long),
-                HttpMethod::Put => curl_easy_setopt(self.handle, CURLOPT_UPLOAD, 1 as libc::c_long),
-                HttpMethod::Delete => curl_easy_setopt(self.handle, CURLOPT_CUSTOMREQUEST, HTTP_METHOD_DELETE.as_ptr()),
+                HttpMethod::Get => self.as_ref().set_option(EasyOption::HttpGet(true))?,
+                HttpMethod::Post => self.as_ref().set_option(EasyOption::HttpPost(true))?,
+                HttpMethod::Put => self.as_ref().set_option(EasyOption::Upload(true))?,
+                HttpMethod::Delete => self.as_ref().set_option(EasyOption::CustomRequest(Some(HTTP_METHOD_DELETE.as_cstr())))?,
             };
 
             self.as_mut().get_unchecked_mut().url_cstring = CString::new(request.url.clone())?;
-            curl_easy_setopt(self.handle, CURLOPT_URL, self.url_cstring.as_ptr());
+            self.as_ref().set_option(EasyOption::Url(self.url_cstring.as_c_str()))?;
 
             let headers = request.headers.iter().fold(std::ptr::null_mut(), |list, pair| {
                 let value = CString::new(format!("{}: {}", pair.0, pair.1));
@@ -237,16 +289,15 @@ impl HttpResponseInner {
                         eprintln!("NULL characters inside header name or value - {}: {}", pair.0, pair.1);
                         list
                     }
-                }                
+                }
             });
 
             if !headers.is_null() {
-                curl_easy_setopt(self.handle, CURLOPT_HTTPHEADER, headers);
+                self.as_ref().set_option(EasyOption::Headers(headers))?;
             }
 
             self.as_mut().get_unchecked_mut().headers = headers;
-
-            curl_easy_setopt(self.handle, CURLOPT_FOLLOWLOCATION, request.follow_redirects as libc::c_long);
+            self.as_ref().set_option(EasyOption::FollowLocation(request.follow_redirects))?;
             Ok(())
         }
     }
@@ -508,14 +559,36 @@ impl HttpPinnedData {
         })
     }
 
-    fn init(mut self: Pin<&mut Self>) {
+    unsafe fn set_option(&self, option: MultiOption) -> Result<(), HttpClientError> {
+        let error = match option {
+            MultiOption::SocketFunction(function) => {
+                curl_multi_setopt(self.multi_handle, CURLMOPT_SOCKETFUNCTION, function)
+            },
+            MultiOption::SocketFunctionData(data) => {
+                curl_multi_setopt(self.multi_handle, CURLMOPT_SOCKETDATA, data)
+            },
+            MultiOption::TimerFunction(function) => {
+                curl_multi_setopt(self.multi_handle, CURLMOPT_TIMERFUNCTION, function)
+            },
+            MultiOption::TimerFunctionData(data) => {
+                curl_multi_setopt(self.multi_handle, CURLMOPT_TIMERDATA, data)
+            }
+        };
+
+        match error {
+            CURLM_OK => Ok(()),
+            error => Err(HttpClientError::CurlMultiError(error as u32, curlm_code_to_error(error)))
+        }
+    }
+
+    fn init(mut self: Pin<&mut Self>) -> Result<(), HttpClientError> {
         unsafe {
             let this = self.as_mut().get_unchecked_mut() as *mut HttpPinnedData as *mut libc::c_void;
 
-            curl_multi_setopt(self.multi_handle, CURLMOPT_SOCKETFUNCTION, socket_callback as *mut libc::c_void);
-            curl_multi_setopt(self.multi_handle, CURLMOPT_SOCKETDATA, this);
-            curl_multi_setopt(self.multi_handle, CURLMOPT_TIMERFUNCTION, timer_callback as *mut libc::c_void);
-            curl_multi_setopt(self.multi_handle, CURLMOPT_TIMERDATA, this);
+            self.as_ref().set_option(MultiOption::SocketFunction(socket_callback))?;
+            self.as_ref().set_option(MultiOption::SocketFunctionData(this))?;
+            self.as_ref().set_option(MultiOption::TimerFunction(timer_callback))?;
+            self.as_ref().set_option(MultiOption::TimerFunctionData(this))?;
 
             let poller = self.poller.clone();
             let multi_handle = self.multi_handle;
@@ -554,6 +627,8 @@ impl HttpPinnedData {
                 }
             });
         }
+
+        Ok(())
     }
 
     pub fn execute(mut self: Pin<&mut Self>, request: HttpRequest) -> Result<HttpResponse, HttpClientError> {
@@ -604,7 +679,7 @@ pub struct HttpClient {
 impl HttpClient {
     pub fn new() -> Result<Self, HttpClientError>  {
         let mut ptr = Box::pin(HttpPinnedData::new()?);
-        ptr.as_mut().init();
+        ptr.as_mut().init()?;
 
         Ok(Self { ptr })
     }
@@ -669,25 +744,21 @@ unsafe extern "C" fn timer_callback(_: *mut CURLM, timeout_ms: libc::c_long, soc
     0
 }
 
-extern "C" fn read_proxy(ptr: *mut libc::c_void, size: libc::size_t, nmemb: libc::size_t, userdata: *mut libc::c_void) -> libc::size_t {
-    unsafe {
-        let upload = &mut *(userdata as *mut UploadBuffer);
-        let bytes_requested = size * nmemb;
-        let bytes_to_copy = std::cmp::min(bytes_requested, upload.data.len() - upload.offset);
+unsafe extern "C" fn read_proxy(ptr: *mut libc::c_void, size: libc::size_t, nmemb: libc::size_t, userdata: *mut libc::c_void) -> libc::size_t {
+    let upload = &mut *(userdata as *mut UploadBuffer);
+    let bytes_requested = size * nmemb;
+    let bytes_to_copy = std::cmp::min(bytes_requested, upload.data.len() - upload.offset);
 
-        std::ptr::copy_nonoverlapping(upload.data.as_ptr(), ptr as *mut u8, bytes_to_copy);
-        upload.offset += bytes_to_copy;
+    std::ptr::copy_nonoverlapping(upload.data.as_ptr(), ptr as *mut u8, bytes_to_copy);
+    upload.offset += bytes_to_copy;
 
-        bytes_to_copy
-    }
+    bytes_to_copy
 }
 
-extern "C" fn write_proxy(ptr: *mut libc::c_char, size: libc::size_t, nmemb: libc::size_t, userdata: *mut libc::c_void) -> libc::size_t {
-    unsafe {
-        let data = std::slice::from_raw_parts(ptr as *const u8, size * nmemb);
-        let buffer = &mut *(userdata as *mut Vec<u8>);
-        buffer.extend_from_slice(data);
-    }
+unsafe extern "C" fn write_proxy(ptr: *mut libc::c_char, size: libc::size_t, nmemb: libc::size_t, userdata: *mut libc::c_void) -> libc::size_t {
+    let data = std::slice::from_raw_parts(ptr as *const u8, size * nmemb);
+    let buffer = &mut *(userdata as *mut Vec<u8>);
+    buffer.extend_from_slice(data);
 
     size * nmemb
 }
@@ -833,6 +904,12 @@ fn schedule_timeout(poller: HttpClientDataPtr, seconds: i64, nanoseconds: i64) {
                 schedule_timeout(poller.clone(), seconds, nanoseconds);
             });
         }
+    }
+}
+
+fn curlm_code_to_error(code: CURLMcode) -> String {
+    unsafe {
+        CStr::from_ptr(curl_multi_strerror(code)).to_string_lossy().into_owned()
     }
 }
 
