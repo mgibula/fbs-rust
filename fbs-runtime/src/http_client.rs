@@ -1,9 +1,11 @@
 use std::ffi::CString;
+use std::ffi::CStr;
 use std::marker::PhantomPinned;
 use std::rc::Rc;
 use std::cell::{Cell, RefCell};
 use std::pin::Pin;
 use std::time::Duration;
+use std::collections::HashMap;
 
 use super::async_spawn;
 use super::async_utils::{async_channel_create, AsyncChannelRx, AsyncChannelTx, AsyncSignal};
@@ -35,6 +37,7 @@ pub struct HttpRequest {
 #[derive(Debug, Clone)]
 pub struct HttpResponseData {
     http_code: i32,
+    headers: HashMap<String, String>,
     response_body: Vec<u8>,
 }
 
@@ -81,7 +84,11 @@ impl HttpResponse {
         waiter.await;
 
         let buffer = std::mem::take(&mut self.ptr.borrow_mut().as_mut().take_data_received());
-        HttpResponseData { http_code: 200, response_body: buffer }
+
+        let mut result = HttpResponseData { http_code: 0, response_body: buffer, headers: HashMap::new() };
+        self.ptr.borrow_mut().as_mut().fill_response_data(&mut result);
+
+        result
     }
 }
 
@@ -169,6 +176,37 @@ impl HttpResponseInner {
     fn take_data_received(mut self: Pin<&mut Self>) -> Vec<u8> {
         unsafe {
             std::mem::take(&mut self.as_mut().get_unchecked_mut().data_received)
+        }
+    }
+
+    fn fill_response_data(mut self: Pin<&mut Self>, data: &mut HttpResponseData) {
+        unsafe {
+            let mut code: libc::c_long = 0;
+            curl_easy_getinfo(self.handle, CURLINFO_RESPONSE_CODE, &mut code);
+
+            let mut prev_header = std::ptr::null_mut::<curl_header>();
+            loop {
+                let header = curl_easy_nextheader(self.handle, CURLH_HEADER, -1, prev_header);
+                if header.is_null() {
+                    break;
+                }
+
+                let key = CStr::from_ptr((*header).name).to_str();
+                let value = CStr::from_ptr((*header).value).to_str();
+
+                prev_header = header;
+                match (key, value) {
+                    (Ok(key), Ok(value)) => {
+                        data.headers.insert(key.to_owned(), value.to_owned());
+                    },
+                    (_, _) => {
+                        eprintln!("Invalid characters in header name or value, skipping");
+                        continue;
+                    },
+                }
+            }
+
+            data.http_code = code as i32;
         }
     }
 }
@@ -409,7 +447,7 @@ impl HttpPinnedData {
                             };
 
                             let mut running: i32 = 0;
-                            let error = curl_multi_socket_action(multi_handle, fd as u32, mask as i32, &mut running);
+                            let error = curl_multi_socket_action(multi_handle, fd, mask as i32, &mut running);
                             match error as u32 {
                                 CURLE_OK    => poller.complete_requests(),
                                 _           => poller.fail_all_requests(),
@@ -418,7 +456,7 @@ impl HttpPinnedData {
                         IOEvent::TimerFired => {
                             // println!("IOEvent::TimerFired event");
                             let mut running: i32 = 0;
-                            let error = curl_multi_socket_action(multi_handle, CURL_SOCKET_TIMEOUT as u32, 0, &mut running);
+                            let error = curl_multi_socket_action(multi_handle, CURL_SOCKET_TIMEOUT, 0, &mut running);
                             match error as u32 {
                                 CURLE_OK    => poller.complete_requests(),
                                 _           => poller.fail_all_requests(),
@@ -737,6 +775,7 @@ mod tests {
 
             let response = client.execute(request).unwrap();
             let r = response.wait_for_completion().await;
+            dbg!(r);
         });
     }
 }
