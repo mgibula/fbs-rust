@@ -32,18 +32,19 @@ pub enum HttpMethod {
 pub struct HttpRequest {
     pub method: HttpMethod,
     pub url: String,
+    pub headers: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct HttpResponseData {
     http_code: i32,
     headers: HashMap<String, String>,
-    response_body: Vec<u8>,
+    pub response_body: Vec<u8>,
 }
 
 impl HttpRequest {
     pub fn new() -> Self {
-        Self { method: HttpMethod::Get, url: String::new() }
+        Self { method: HttpMethod::Get, url: String::new(), headers: HashMap::new() }
     }
 }
 
@@ -106,12 +107,17 @@ struct HttpResponseInner {
     curl_error: [u8; CURL_ERROR_SIZE as usize],
     url_cstring: CString,
     completion: AsyncSignal,
+    headers: *mut curl_slist,
     _pin: PhantomPinned,
 }
 
 impl Drop for HttpResponseInner {
     fn drop(&mut self) {
         unsafe {
+            if !self.headers.is_null() {
+                curl_slist_free_all(self.headers);
+            }
+
             curl_easy_cleanup(self.handle);
         }
     }
@@ -132,6 +138,7 @@ impl HttpResponseInner {
                 curl_error: [0; CURL_ERROR_SIZE as usize],
                 url_cstring: CString::default(),
                 completion: AsyncSignal::new(),
+                headers: std::ptr::null_mut(),
                 _pin: PhantomPinned,
             })
         }
@@ -160,8 +167,27 @@ impl HttpResponseInner {
                 HttpMethod::Delete => curl_easy_setopt(self.handle, CURLOPT_CUSTOMREQUEST, HTTP_METHOD_DELETE.as_ptr()),
             };
 
-            self.as_mut().get_unchecked_mut().url_cstring = CString::new(request.url.clone()).unwrap();
+            self.as_mut().get_unchecked_mut().url_cstring = CString::new(request.url.clone()).expect("NULL characters inside URL");
             curl_easy_setopt(self.handle, CURLOPT_URL, self.url_cstring.as_ptr());
+
+            let headers = request.headers.iter().fold(std::ptr::null_mut(), |list, pair| {
+                let value = CString::new(format!("{}: {}", pair.0, pair.1));
+                match value {
+                    Ok(value) => {
+                        curl_slist_append(list, value.as_ptr() as *const libc::c_char)
+                    },
+                    Err(_) => {
+                        eprintln!("NULL characters inside header name or value - {}: {}", pair.0, pair.1);
+                        list
+                    }
+                }                
+            });
+
+            if !headers.is_null() {
+                curl_easy_setopt(self.handle, CURLOPT_HTTPHEADER, headers);
+            }
+
+            self.as_mut().get_unchecked_mut().headers = headers;
         }
     }
 
@@ -772,6 +798,7 @@ mod tests {
             let mut client = HttpClient::new().unwrap();
             let mut request = HttpRequest::new();
             request.url = String::from("http://www.onet.pl");
+            request.headers.insert("X-Test-Header".to_owned(), "123".to_owned());
 
             let response = client.execute(request).unwrap();
             let r = response.wait_for_completion().await;
