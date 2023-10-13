@@ -174,7 +174,7 @@ pub type AsyncAccept = AsyncOp::<ResultSocket>;
 pub type AsyncConnect = AsyncOp::<ResultErrno>;
 pub type AsyncTimeout = AsyncOp::<ResultSuccess>;
 pub type AsyncTimeoutWithResult = AsyncOp::<ResultErrnoTimeout>;
-pub type AsyncCancel = AsyncOp::<ResultSuccess>;
+pub type AsyncCancel = AsyncOp::<ResultErrno>;
 pub type AsyncPoll = AsyncOp::<ResultErrno>;
 
 pub fn async_nop() -> AsyncNop {
