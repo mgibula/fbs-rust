@@ -1013,12 +1013,13 @@ mod tests {
         async_run(async move {
             let mut client = HttpClient::new().unwrap();
             let mut request = HttpRequest::new();
-            request.url = String::from("http://www.onet.pl");
-            request.headers.insert("X-Test-Header".to_owned(), "123".to_owned());
+            request.url = String::from("http://www.google.com/");
+            request.follow_redirects = true;
 
             let response = client.execute(request).unwrap();
             let r = response.wait_for_completion().await;
-            dbg!(r);
+
+            assert_eq!(r.is_ok(), true);
         });
     }
 }
