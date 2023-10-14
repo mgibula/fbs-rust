@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 use std::rc::Rc;
 use std::cell::RefCell;
+use std::fmt::{Debug, Formatter};
 
 pub struct ChannelRx<T> {
     backend: Rc<ChannelBackend<T>>,
@@ -26,6 +27,30 @@ struct ChannelBackend<T> {
     messages: RefCell<VecDeque<T>>,
 }
 
+impl<T> Debug for ChannelBackend<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Channel")
+            .field("messages", &self.messages.borrow().len())
+            .finish()
+    }
+}
+
+impl<T> Debug for ChannelTx<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChannelTx")
+            .field("messages", &self.backend.messages.borrow().len())
+            .finish()
+    }
+}
+
+impl<T> Debug for ChannelRx<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChannelRx")
+            .field("messages", &self.backend.messages.borrow().len())
+            .finish()
+    }
+}
+
 impl<T> ChannelRx<T> {
     pub fn receive(&mut self) -> Option<T> {
         self.backend.receive()
@@ -47,13 +72,13 @@ impl<T> ChannelRx<T> {
 }
 
 impl<T> ChannelTx<T> {
-    pub fn send(&self, value : T) {
+    pub fn send(&self, value: T) {
         self.backend.send(value)
     }
 }
 
 impl<T> ChannelBackend<T> {
-    pub fn send(&self, value : T) {
+    pub fn send(&self, value: T) {
         self.messages.borrow_mut().push_back(value);
     }
 
