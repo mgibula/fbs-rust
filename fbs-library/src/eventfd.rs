@@ -66,7 +66,7 @@ impl EventFd {
             let data = value.to_ne_bytes();
             let result = libc::write(self.fd.as_raw_fd(), data.as_ptr() as *const libc::c_void, data.len());
             match result as i32 {
-                0 => true,
+                i if i == data.len() as i32  => true,
                 libc::EAGAIN => false,
                 _ => panic!("Unknown write result for eventdf = {}", result),
             }
