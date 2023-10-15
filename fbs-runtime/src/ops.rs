@@ -210,6 +210,10 @@ pub fn async_write<T: AsRawFd>(fd: &T, buffer: Vec<u8>, offset: Option<u64>) -> 
     AsyncOp::new(IOUringOp::Write(fd.as_raw_fd(), Buffer::from_vec(buffer), offset))
 }
 
+pub fn async_write_struct<U: Copy + Unpin + 'static>(fd: &impl AsRawFd, value: U, offset: Option<u64>) -> AsyncWrite {
+    AsyncOp::new(IOUringOp::Write(fd.as_raw_fd(), Buffer::new_struct_from(value), offset))
+}
+
 pub fn async_accept<T: AsRawFd>(fd: &T, flags: i32) -> AsyncAccept {
     AsyncOp::new(IOUringOp::Accept(fd.as_raw_fd(), flags))
 }

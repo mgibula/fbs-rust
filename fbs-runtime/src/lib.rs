@@ -329,6 +329,10 @@ mod tests {
             assert_eq!(read_content.capacity(), 10);
             assert_eq!(read_content, vec![116, 101, 115, 116]);
 
+            let test_struct = TestStruct(116, 101, 115, 116);
+            let result = async_write_struct::<TestStruct>(fd, test_struct, Some(0)).await;
+            assert_eq!(result.is_ok(), true);
+
             let result = async_read_struct::<TestStruct>(fd, Some(0)).await;
             assert!(result.is_ok());
             assert_eq!(result.unwrap(), TestStruct { 0: 116, 1: 101, 2: 115, 3: 116});

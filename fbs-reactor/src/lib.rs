@@ -98,6 +98,15 @@ impl Buffer {
         }
     }
 
+    pub fn new_struct_from<T: Copy>(value: T) -> Self {
+        let buffer = Buffer::new_struct::<T>();
+        unsafe {
+            std::ptr::write(buffer.ptr as *mut T, value);
+        }
+
+        buffer
+    }
+
     pub fn from_vec<T: Copy>(buffer: Vec<T>) -> Self {
         let mut buffer = ManuallyDrop::new(buffer);
 
