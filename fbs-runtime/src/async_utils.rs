@@ -1,3 +1,4 @@
+use std::os::fd::AsRawFd;
 use std::pin::Pin;
 use std::cell::Cell;
 use std::future::Future;
@@ -7,6 +8,12 @@ use std::fmt::{Debug, Formatter};
 use std::collections::VecDeque;
 use std::rc::Rc;
 use std::cell::RefCell;
+use std::sync::Arc;
+
+use fbs_library::eventfd::*;
+use fbs_library::system_error::SystemError;
+
+use super::{async_read_struct, async_write_struct};
 
 #[derive(Debug)]
 pub struct AsyncChannelRx<T> {
@@ -168,6 +175,48 @@ impl Future for AsyncSignal {
     }
 }
 
+struct AsyncSignalBackendMT {
+    eventfd: EventFd,
+}
+
+impl AsyncSignalBackendMT {
+    fn new() -> Result<Self, SystemError> {
+        Ok(Self { eventfd: EventFd::new(0, EventFdFlags::new().close_on_exec(true))? })
+    }
+}
+
+pub struct AsyncSignalMT {
+    ptr: Arc<AsyncSignalBackendMT>,
+}
+
+impl AsyncSignalMT {
+    pub fn new() -> Result<Self, SystemError> {
+        Ok(Self { ptr: Arc::new(AsyncSignalBackendMT::new()?)})
+    }
+
+    pub fn trigger(&self) -> AsyncSignalTriggerMT {
+        AsyncSignalTriggerMT { ptr: self.ptr.clone() }
+    }
+
+    pub async fn wait(&self) {
+        async_read_struct::<u64>(&self.ptr.eventfd.as_raw_fd(), None).await.expect("Error while waiting for event signal");
+    }
+}
+
+pub struct AsyncSignalTriggerMT {
+    ptr: Arc<AsyncSignalBackendMT>,
+}
+
+impl AsyncSignalTriggerMT {
+    pub fn signal(&self) {
+        self.ptr.eventfd.write(1);
+    }
+
+    pub async fn async_signal(&self) {
+        async_write_struct(&self.ptr.eventfd.as_raw_fd(), 1 as u64, None).await.expect("Error while writing to event signal");
+    }
+}
+
 #[cfg(test)]
 mod test {
     use crate::{async_run, async_spawn};
@@ -220,6 +269,43 @@ mod test {
                 assert_eq!(sig1cpy.is_signalled(), false);
                 sig1cpy.signal();
                 assert_eq!(sig1cpy.is_signalled(), true);
+
+                sig2.wait().await;
+                tx2.send(3);
+            });
+
+            let v1 = rx1.receive().await;
+            let v2 = rx1.receive().await;
+            let v3 = rx1.receive().await;
+
+            assert_eq!(v1, 2);
+            assert_eq!(v2, 1);
+            assert_eq!(v3, 3);
+        });
+    }
+
+    #[test]
+    fn async_signal_mt_test() {
+        async_run(async {
+            let (mut rx1, tx1) = async_channel_create::<i32>();
+            let tx2 = tx1.clone();
+            let sig1 = AsyncSignalMT::new().unwrap();
+            let sig1cpy = sig1.trigger();
+
+            let sig2 = AsyncSignalMT::new().unwrap();
+            let sig2cpy = sig2.trigger();
+
+            async_spawn(async move {
+                sig1.wait().await;
+
+                tx1.send(1);
+                sig2cpy.signal();
+            });
+
+            async_spawn(async move {
+                tx2.send(2);
+
+                sig1cpy.signal();
 
                 sig2.wait().await;
                 tx2.send(3);
