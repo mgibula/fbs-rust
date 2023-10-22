@@ -2,6 +2,7 @@ use std::ffi::NulError;
 use std::mem::MaybeUninit;
 use thiserror::Error;
 use std::ffi::{CString, CStr};
+use std::fmt::{Debug, Formatter};
 
 const INET_ADDRSTRLEN: usize = 16;
 const INET6_ADDRSTRLEN: usize = 46;
@@ -23,6 +24,12 @@ pub enum IpAddressFormatError {
 pub enum IpAddress {
     V4(libc::in_addr),
     V6(libc::in6_addr),
+}
+
+impl Debug for IpAddress {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_text())
+    }
 }
 
 impl IpAddress {
