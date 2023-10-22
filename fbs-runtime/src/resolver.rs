@@ -49,6 +49,34 @@ impl GaiInnerData {
     fn fill(&mut self, query: &DnsQuery) {
         self.0.ar_name = CString::new(query.domain.clone()).expect("Forbidden characters in dns record name").into_raw();
     }
+
+    fn get_result(&mut self) -> Vec<IpAddress> {
+        let mut result = Vec::new();
+
+        unsafe {
+            let mut ptr = self.0.ar_result;
+            loop {
+                match (*ptr).ai_family {
+                    libc::AF_INET => {
+                        let inet4_ptr = (*ptr).ai_addr as *mut libc::sockaddr_in;
+                        result.push(IpAddress::from_inet4(&(*inet4_ptr).sin_addr));
+                    },
+                    libc::AF_INET6 => {
+                        let inet6_ptr = (*ptr).ai_addr as *mut libc::sockaddr_in6;
+                        result.push(IpAddress::from_inet6(&(*inet6_ptr).sin6_addr));
+                    },
+                    _ => (),
+                }
+
+                ptr = (*ptr).ai_next;
+                if ptr.is_null() {
+                    break;
+                }
+            }
+        }
+
+        result
+    }
 }
 
 impl Drop for GaiInnerData {
@@ -87,7 +115,7 @@ impl Drop for DnsQuery {
 }
 
 impl Future for DnsQuery {
-    type Output = DnsRecord;
+    type Output = Vec<IpAddress>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let inner = self.as_ref().get_ref();
@@ -114,7 +142,7 @@ impl Future for DnsQuery {
         match result {
             Poll::Pending => Poll::Pending,
             Poll::Ready(_) => {
-                Poll::Ready(DnsRecord::Empty)
+                Poll::Ready(gai_data.get_result())
             }
         }
     }
@@ -153,6 +181,8 @@ mod test {
         async_run(async {
             let query = DnsQuery::new("google.com".to_string());
             let result = query.await;
+
+            dbg!(result);
         });
     }
 }
