@@ -24,6 +24,7 @@ fn main() {
         .allowlist_var("EAI_INTR")
         .allowlist_var("EAI_CANCELED")
         .allowlist_var("EAI_NOTCANCELED")
+        .allowlist_var("EAI_INPROGRESS")
         .allowlist_recursively(false)
         .prepend_enum_name(false)
         .header("wrapper.h")

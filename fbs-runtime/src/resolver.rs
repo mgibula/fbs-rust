@@ -7,10 +7,11 @@ use std::mem::MaybeUninit;
 use std::sync::{Arc, Mutex};
 
 use fbs_library::eventfd::{EventFd, EventFdFlags};
+use fbs_library::ip_address::IpAddress;
+
 use libc::{timespec, addrinfo, sigval, SIGEV_THREAD};
 use libc::pthread_attr_t;
-
-use fbs_library::ip_address::IpAddress;
+use thiserror::Error;
 
 use crate::{AsyncReadStruct, async_read_struct};
 
@@ -20,10 +21,18 @@ fn gai_code_to_error(code: libc::c_int) -> String {
     unsafe { CStr::from_ptr(gai_strerror(code)).to_string_lossy().into_owned() }
 }
 
-pub enum DnsRecord {
-    Empty,
-    A(IpAddress),
-    Cname(String),
+#[derive(Error, Debug)]
+pub enum ResolverError {
+    #[error("The name server returned a temporary failure indication.  Try again later")]
+    TemporaryError,
+    #[error("Invalid parameters")]
+    InvalidParameters,
+    #[error("The name server returned a permanent failure indication")]
+    PermanentError,
+    #[error("Internal error")]
+    InternalError(i32, String),
+    #[error("No records found")]
+    NoRecord,
 }
 
 pub struct DnsQuery {
@@ -50,11 +59,33 @@ impl GaiInnerData {
         self.0.ar_name = CString::new(query.domain.clone()).expect("Forbidden characters in dns record name").into_raw();
     }
 
-    fn get_result(&mut self) -> Vec<IpAddress> {
+    fn is_completed(&self) -> bool {
+        unsafe {
+            let ptr = &self.0 as *const gaicb;
+            let status = gai_error(ptr.cast_mut());
+
+            match status {
+                EAI_INPROGRESS => false,
+                _ => true,
+            }
+        }
+    }
+
+    fn get_result(&mut self) -> Result<Vec<IpAddress>, ResolverError> {
         let mut result = Vec::new();
 
         unsafe {
             let mut ptr = self.0.ar_result;
+            let query_result = gai_error(&mut self.0);
+            match query_result {
+                0 => (),
+                libc::EAI_AGAIN => return Err(ResolverError::TemporaryError),
+                libc::EAI_BADFLAGS => return Err(ResolverError::InvalidParameters),
+                libc::EAI_FAIL => return Err(ResolverError::PermanentError),
+                libc::EAI_NODATA | libc::EAI_NONAME | libc::EAI_SERVICE => return Err(ResolverError::NoRecord),
+                error => return Err(ResolverError::InternalError(error, gai_code_to_error(query_result))),
+            }
+
             loop {
                 match (*ptr).ai_family {
                     libc::AF_INET => {
@@ -75,7 +106,7 @@ impl GaiInnerData {
             }
         }
 
-        result
+        Ok(result)
     }
 }
 
@@ -108,14 +139,8 @@ impl Default for DnsQuery {
     }
 }
 
-impl Drop for DnsQuery {
-    fn drop(&mut self) {
-
-    }
-}
-
 impl Future for DnsQuery {
-    type Output = Vec<IpAddress>;
+    type Output = Result<Vec<IpAddress>, ResolverError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let inner = self.as_ref().get_ref();
@@ -139,9 +164,12 @@ impl Future for DnsQuery {
         }
 
         let result = gai_data.2.as_mut().poll(cx);
-        match result {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(_) => {
+
+        // is_completed() is to protect against spurious wakeups
+        match (result, gai_data.is_completed()) {
+            (Poll::Pending, _)      => Poll::Pending,
+            (Poll::Ready(_), false) => Poll::Pending,
+            (Poll::Ready(_), true)  => {
                 Poll::Ready(gai_data.get_result())
             }
         }
@@ -182,7 +210,18 @@ mod test {
             let query = DnsQuery::new("google.com".to_string());
             let result = query.await;
 
-            dbg!(result);
+            assert!(result.is_ok());
         });
     }
+
+    #[test]
+    fn async_resolver_test2() {
+        async_run(async {
+            let query = DnsQuery::new("googlecom".to_string());
+            let result = query.await;
+
+            assert!(result.is_err());
+        });
+    }
+
 }

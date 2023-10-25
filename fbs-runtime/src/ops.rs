@@ -44,7 +44,7 @@ impl<T> AsyncResultEx for Result<T, (SystemError, Vec<u8>)> {
     fn timed_out(&self) -> bool {
         self.as_ref().is_err_and(|e| e.0.timed_out())
     }
-}
+} 
 
 pub struct ResultSuccess;
 
