@@ -158,8 +158,9 @@ impl Future for DnsQuery {
 
                 let mut entries = &mut gai_data.0 as *mut gaicb;
                 let result = getaddrinfo_a(GAI_NOWAIT as i32, &mut entries as *mut *mut gaicb, 1, &mut handler);
-
-                assert_eq!(result, 0);
+                if result != 0 {
+                    return Poll::Ready(Err(ResolverError::InternalError(result, gai_code_to_error(result))));
+                }
             }
         }
 
