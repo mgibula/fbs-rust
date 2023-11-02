@@ -5,6 +5,7 @@ use super::ip_address::*;
 
 use thiserror::Error;
 
+#[derive(Debug, PartialEq, Eq)]
 pub struct SocketIpAddress {
     address: IpAddress,
     port: u16,
