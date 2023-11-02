@@ -32,6 +32,28 @@ impl Debug for IpAddress {
     }
 }
 
+impl PartialEq for IpAddress {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (IpAddress::V4(addr1), IpAddress::V4(addr2)) => {
+                let addr1: &[u8] = unsafe { std::slice::from_raw_parts(addr1 as *const libc::in_addr as *const u8, std::mem::size_of::<libc::in_addr>()) };
+                let addr2: &[u8] = unsafe { std::slice::from_raw_parts(addr2 as *const libc::in_addr as *const u8, std::mem::size_of::<libc::in_addr>()) };
+
+                addr1 == addr2
+            },
+            (IpAddress::V6(addr1), IpAddress::V6(addr2)) => {
+                let addr1: &[u8] = unsafe { std::slice::from_raw_parts(addr1 as *const libc::in6_addr as *const u8, std::mem::size_of::<libc::in6_addr>()) };
+                let addr2: &[u8] = unsafe { std::slice::from_raw_parts(addr2 as *const libc::in6_addr as *const u8, std::mem::size_of::<libc::in6_addr>()) };
+
+                addr1 == addr2
+            },
+            (_, _) => false
+        }
+    }
+}
+
+impl Eq for IpAddress {}
+
 impl IpAddress {
     pub fn from_text(value: &str) -> Result<IpAddress, IpAddressFormatError> {
         let c_value = CString::new(value)?;
@@ -149,5 +171,19 @@ mod tests {
 
         let text = binary.to_text();
         assert_eq!(text, String::from("2001:db8:3333:4444:5555:6666:7777:8888"));
+    }
+
+    #[test]
+    fn compare_addr() {
+        let addr1 = IpAddress::from_text("127.0.0.1").unwrap();
+        let addr2 = IpAddress::from_text("127.0.0.2").unwrap();
+        let addr3 = IpAddress::from_text("2001:db8:3333:4444:5555:6666:7777:8888").unwrap();
+        let addr4 = IpAddress::from_text("2001:db8:3333:4444:5555:6666:7777:8889").unwrap();
+
+        assert_eq!(addr1, addr1);
+        assert_ne!(addr1, addr2);
+        assert_ne!(addr1, addr3);
+        assert_eq!(addr3, addr3);
+        assert_ne!(addr3, addr4);
     }
 }
