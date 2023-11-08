@@ -1,4 +1,5 @@
 #![allow(nonstandard_style)]
+use std::collections::HashSet;
 use std::ffi::{CStr, CString};
 use std::task::{Context, Poll};
 use std::pin::Pin;
@@ -35,20 +36,59 @@ pub enum ResolverError {
     NoRecord,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct DnsQueryFlags {
+    return_ipv4: bool,
+    return_ipv6: bool,
+}
+
+impl Default for DnsQueryFlags {
+    fn default() -> Self {
+        Self { return_ipv4: true, return_ipv6: false }
+    }
+}
+
+impl DnsQueryFlags {
+    pub fn return_ipv4(mut self, value: bool) -> Self {
+        self.return_ipv4 = value;
+        self
+    }
+
+    pub fn return_ipv6(mut self, value: bool) -> Self {
+        self.return_ipv6 = value;
+        self
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DnsResult {
+    addresses: Vec<IpAddress>,
+}
+
+impl DnsResult {
+    pub fn all_record(&self) -> Vec<IpAddress> {
+        self.addresses.clone()
+    }
+
+    pub fn one_record(&self) -> IpAddress {
+        self.addresses[0]
+    }
+}
+
 pub struct DnsQuery {
     domain: String,
     internal: Arc<Mutex<GaiInnerData>>,
 }
 
 #[repr(C)]
-struct GaiInnerData(gaicb, EventFd, Pin<Box<AsyncReadStruct<u64>>>);
+struct GaiInnerData(gaicb, EventFd, Pin<Box<AsyncReadStruct<u64>>>, DnsQueryFlags);
 
 impl GaiInnerData {
-    fn new() -> Self {
+    fn new(flags: DnsQueryFlags) -> Self {
         let eventfd = EventFd::new(0, EventFdFlags::new()).unwrap();
         let waiter = async_read_struct::<u64>(&eventfd, None);
 
-        Self(unsafe { MaybeUninit::zeroed().assume_init() }, eventfd, Box::pin(waiter))
+        Self(unsafe { MaybeUninit::zeroed().assume_init() }, eventfd, Box::pin(waiter), flags)
     }
 
     fn is_filled(&self) -> bool {
@@ -71,8 +111,8 @@ impl GaiInnerData {
         }
     }
 
-    fn get_result(&mut self) -> Result<Vec<IpAddress>, ResolverError> {
-        let mut result = Vec::new();
+    fn get_result(&mut self) -> Result<DnsResult, ResolverError> {
+        let mut result: HashSet<IpAddress> = HashSet::new();
 
         unsafe {
             let mut ptr = self.0.ar_result;
@@ -89,12 +129,16 @@ impl GaiInnerData {
             loop {
                 match (*ptr).ai_family {
                     libc::AF_INET => {
-                        let inet4_ptr = (*ptr).ai_addr as *mut libc::sockaddr_in;
-                        result.push(IpAddress::from_inet4(&(*inet4_ptr).sin_addr));
+                        if self.3.return_ipv4 {
+                            let inet4_ptr = (*ptr).ai_addr as *mut libc::sockaddr_in;
+                            result.insert(IpAddress::from_inet4(&(*inet4_ptr).sin_addr));
+                        }
                     },
                     libc::AF_INET6 => {
-                        let inet6_ptr = (*ptr).ai_addr as *mut libc::sockaddr_in6;
-                        result.push(IpAddress::from_inet6(&(*inet6_ptr).sin6_addr));
+                        if self.3.return_ipv6 {
+                            let inet6_ptr = (*ptr).ai_addr as *mut libc::sockaddr_in6;
+                            result.insert(IpAddress::from_inet6(&(*inet6_ptr).sin6_addr));
+                        }
                     },
                     _ => (),
                 }
@@ -106,7 +150,11 @@ impl GaiInnerData {
             }
         }
 
-        Ok(result)
+        if result.is_empty() {
+            return Err(ResolverError::NoRecord);
+        }
+
+        Ok(DnsResult { addresses: result.into_iter().collect() })
     }
 }
 
@@ -125,22 +173,22 @@ impl Drop for GaiInnerData {
 }
 
 impl DnsQuery {
-    pub fn new(domain: String) -> Self {
+    pub fn new(domain: String, flags: DnsQueryFlags) -> Self {
         Self {
             domain,
-            internal: Arc::new(Mutex::new(GaiInnerData::new())),
+            internal: Arc::new(Mutex::new(GaiInnerData::new(flags))),
         }
     }
 }
 
 impl Default for DnsQuery {
     fn default() -> Self {
-        DnsQuery::new(String::new())
+        DnsQuery::new(String::new(), DnsQueryFlags::default())
     }
 }
 
 impl Future for DnsQuery {
-    type Output = Result<Vec<IpAddress>, ResolverError>;
+    type Output = Result<DnsResult, ResolverError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let inner = self.as_ref().get_ref();
@@ -208,9 +256,10 @@ mod test {
     #[test]
     fn async_resolver_test1() {
         async_run(async {
-            let query = DnsQuery::new("google.com".to_string());
+            let query = DnsQuery::new("google.com".to_string(), DnsQueryFlags::default());
             let result = query.await;
 
+            dbg!(&result);
             assert!(result.is_ok());
         });
     }
@@ -218,7 +267,7 @@ mod test {
     #[test]
     fn async_resolver_test2() {
         async_run(async {
-            let query = DnsQuery::new("googlecom".to_string());
+            let query = DnsQuery::new("googlecom".to_string(), DnsQueryFlags::default());
             let result = query.await;
 
             assert!(result.is_err());
