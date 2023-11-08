@@ -65,6 +65,12 @@ pub struct DnsResult {
     addresses: Vec<IpAddress>,
 }
 
+impl Into<IpAddress> for DnsResult {
+    fn into(self) -> IpAddress {
+        self.one_record()
+    }
+}
+
 impl DnsResult {
     pub fn all_record(&self) -> Vec<IpAddress> {
         self.addresses.clone()
