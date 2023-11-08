@@ -3,6 +3,7 @@ use std::mem::MaybeUninit;
 use thiserror::Error;
 use std::ffi::{CString, CStr};
 use std::fmt::{Debug, Formatter};
+use std::hash::{Hash, Hasher};
 
 const INET_ADDRSTRLEN: usize = 16;
 const INET6_ADDRSTRLEN: usize = 46;
@@ -24,6 +25,21 @@ pub enum IpAddressFormatError {
 pub enum IpAddress {
     V4(libc::in_addr),
     V6(libc::in6_addr),
+}
+
+impl Hash for IpAddress {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            IpAddress::V4(addr) => {
+                let addr: &[u8] = unsafe { std::slice::from_raw_parts(addr as *const libc::in_addr as *const u8, std::mem::size_of::<libc::in_addr>()) };
+                state.write(addr);
+            },
+            IpAddress::V6(addr) => {
+                let addr: &[u8] = unsafe { std::slice::from_raw_parts(addr as *const libc::in6_addr as *const u8, std::mem::size_of::<libc::in6_addr>()) };
+                state.write(addr);
+            },
+        }
+    }
 }
 
 impl Debug for IpAddress {
