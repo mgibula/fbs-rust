@@ -76,18 +76,43 @@ pub enum SocketAddressFormatError {
 }
 
 impl SocketIpAddress {
-    pub fn from_text(value: &str) -> Result<SocketIpAddress, SocketAddressFormatError> {
-        let separator_index = value.rfind(':');
-        let index = match separator_index {
-            Some(index) => index,
-            None => { return Err(SocketAddressFormatError::NoPortSeparator) }
+    pub fn from_ip_address(address: IpAddress, port: u16) -> SocketIpAddress {
+        SocketIpAddress { address, port }
+    }
+
+    pub fn from_text(value: &str, default_port: Option<u16>) -> Result<SocketIpAddress, SocketAddressFormatError> {
+        let double_colon = value.rfind(':');
+        let bracket = value.rfind(']');
+
+        let (address, port) = match (bracket, double_colon, default_port) {
+            // ipv6 with port (double_colon is behind closing bracket)
+            (Some(bracket), Some(double_colon), _) if double_colon > bracket => {
+                let port = &value[double_colon + 1 ..];
+                let port = port.parse::<u16>()?;
+
+                let address = &value[0..double_colon];
+                let address = address.trim_matches(|c| c == ']' || c == '[');
+                (address, port)
+            },
+            // ipv6 without port
+            (Some(bracket), Some(double_colon), Some(port)) => {
+                let address = value.trim_matches(|c| c == ']' || c == '[');
+                (address, port)
+            },
+            // ipv4 with port
+            (None, Some(double_colon), _) => {
+                let port = &value[double_colon + 1 ..];
+                let port = port.parse::<u16>()?;
+
+                let address = &value[0..double_colon];
+                let address = address.trim_matches(|c| c == ']' || c == '[');
+                (address, port)
+            },
+            // ipv4 without port
+            (None, None, Some(port)) => (value, port),
+            // others
+            (_, _, _) => return Err(SocketAddressFormatError::NoPortSeparator),
         };
-
-        let port = &value[index + 1 ..];
-        let port = port.parse::<u16>()?;
-
-        let address = &value[0..index];
-        let address = address.trim_matches(|c| c == ']' || c == '[');
 
         Ok(SocketIpAddress {
             address: IpAddress::from_text(address)?,
@@ -149,7 +174,7 @@ mod tests {
 
     #[test]
     fn socket_address_from_text_ipv4() {
-        let address = SocketIpAddress::from_text("127.0.0.1:2404").unwrap();
+        let address = SocketIpAddress::from_text("127.0.0.1:2404", None).unwrap();
 
         assert_eq!(address.address().to_text(), "127.0.0.1");
         assert_eq!(address.port(), 2404);
@@ -158,7 +183,25 @@ mod tests {
 
     #[test]
     fn socket_address_from_text_ipv6() {
-        let address = SocketIpAddress::from_text("[2001:db8:3333:4444:5555:6666:7777:8888]:2404").unwrap();
+        let address = SocketIpAddress::from_text("[2001:db8:3333:4444:5555:6666:7777:8888]:2404", None).unwrap();
+
+        assert_eq!(address.address().to_text(), "2001:db8:3333:4444:5555:6666:7777:8888");
+        assert_eq!(address.port(), 2404);
+        assert_eq!(address.to_text(), "[2001:db8:3333:4444:5555:6666:7777:8888]:2404");
+    }
+
+    #[test]
+    fn socket_address_from_text_ipv4_default() {
+        let address = SocketIpAddress::from_text("127.0.0.1", Some(2404)).unwrap();
+
+        assert_eq!(address.address().to_text(), "127.0.0.1");
+        assert_eq!(address.port(), 2404);
+        assert_eq!(address.to_text(), "127.0.0.1:2404");
+    }
+
+    #[test]
+    fn socket_address_from_text_ipv6_default() {
+        let address = SocketIpAddress::from_text("[2001:db8:3333:4444:5555:6666:7777:8888]", Some(2404)).unwrap();
 
         assert_eq!(address.address().to_text(), "2001:db8:3333:4444:5555:6666:7777:8888");
         assert_eq!(address.port(), 2404);
