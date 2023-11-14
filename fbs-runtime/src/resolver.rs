@@ -6,9 +6,11 @@ use std::pin::Pin;
 use std::future::Future;
 use std::mem::MaybeUninit;
 use std::sync::{Arc, Mutex};
+use std::num::ParseIntError;
 
 use fbs_library::eventfd::{EventFd, EventFdFlags};
 use fbs_library::ip_address::IpAddress;
+use fbs_library::socket_address::SocketIpAddress;
 
 use libc::{timespec, addrinfo, sigval, SIGEV_THREAD};
 use libc::pthread_attr_t;
@@ -242,6 +244,42 @@ unsafe extern "C" fn sigev_notifier(ptr: sigval) {
     std::mem::forget(inner_ptr);
 }
 
+#[derive(Error, Debug)]
+pub enum ResolveAddressError {
+    #[error("Port format invalid")]
+    PortInvalid(#[from] ParseIntError),
+    #[error("Port missing")]
+    PortMissing,
+    #[error("Resolver error")]
+    ResolverError(#[from] ResolverError),
+}
+
+pub async fn resolve_address(address: &str, default_port: Option<u16>) -> Result<SocketIpAddress, ResolveAddressError> {
+    let maybe_address = SocketIpAddress::from_text(address, default_port);
+    match maybe_address {
+        Ok(address) => return Ok(address),
+        Err(_) => (),
+    };
+
+    let double_colon = address.rfind(':');
+    let (address, port) = match (double_colon, default_port) {
+        (Some(index), _) => {
+            let port = &address[index + 1 ..];
+            let port = port.parse::<u16>()?;
+            let address = &address[0..index];
+
+            (address, port)
+        },
+        (None, Some(port)) => (address, port),
+        (None, None) => return Err(ResolveAddressError::PortMissing),
+    };
+
+    let query = DnsQuery::new(address.to_string(), DnsQueryFlags::default());
+    let result = query.await?;
+
+    Ok(SocketIpAddress::from_ip_address(result.one_record(), port))
+}
+
 #[cfg(test)]
 mod test {
     use crate::async_run;
@@ -280,4 +318,41 @@ mod test {
         });
     }
 
+    #[test]
+    fn resolve_address_test1() {
+        async_run(async {
+            let address = resolve_address("google.com", Some(80)).await;
+            let address = address.unwrap();
+
+            assert_eq!(address.port(), 80);
+        });
+    }
+
+    #[test]
+    fn resolve_address_test2() {
+        async_run(async {
+            let address = resolve_address("google.com:88", Some(80)).await;
+            let address = address.unwrap();
+
+            assert_eq!(address.port(), 88);
+        });
+    }
+
+    #[test]
+    fn resolve_address_test3() {
+        async_run(async {
+            let address = resolve_address("google.com:88", None).await;
+            let address = address.unwrap();
+
+            assert_eq!(address.port(), 88);
+        });
+    }
+
+    #[test]
+    fn resolve_address_test4() {
+        async_run(async {
+            let address = resolve_address("google.com", None).await;
+            assert!(address.is_err());
+        });
+    }
 }
