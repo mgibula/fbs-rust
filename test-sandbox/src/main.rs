@@ -10,7 +10,7 @@ use fbs_library::sigset::Signal;
 async fn try_connect()
 {
     let sock = Socket::new(SocketDomain::Inet, SocketType::Stream, SocketFlags::new().close_on_exec(true).flags());
-    let destination = SocketIpAddress::from_text("99.83.207.202:80").unwrap();
+    let destination = SocketIpAddress::from_text("99.83.207.202:80", None).unwrap();
 
     let connect_result = async_connect(&sock, destination).await;
     match connect_result {
@@ -74,7 +74,7 @@ fn main() {
             }
         });
 
-        let server_address = SocketIpAddress::from_text("0.0.0.0:2404").unwrap();
+        let server_address = SocketIpAddress::from_text("0.0.0.0:2404", None).unwrap();
         let mut socket = Socket::new(SocketDomain::Inet, SocketType::Stream, SocketFlags::new().flags());
 
         socket.set_option(SocketOptions::ReuseAddr(true)).unwrap();
