@@ -1,22 +1,35 @@
 use std::collections::HashMap;
 
-const PROTOCOL_HEADER: &[u8] = b"AMQP\0\091";
+pub const PROTOCOL_HEADER: &[u8] = b"AMQP\x00\x00\x09\x01";
 
-struct FrameHeader {
-    frame_type: u8,
-    channel: u16,
-    size: u32,
+#[derive(Debug, Clone)]
+pub struct FrameHeader {
+    pub frame_type: u8,
+    pub channel: u16,
+    pub size: u32,
 }
 
-struct FramePayload {
-    payload: Vec<u8>,
+#[derive(Debug, Clone)]
+pub struct FramePayload {
+    pub payload: Vec<u8>,
 }
 
-struct FrameEnd {
-    frame_end: u8,
+#[derive(Debug, Clone)]
+pub struct FrameEnd {
+    pub frame_end: u8,
 }
 
 #[non_exhaustive]
+#[derive(Debug)]
+enum AmqpFrameType {
+    Method          = 1,
+    Header          = 2,
+    Body            = 3,
+    Heartbeat       = 4,
+}
+
+#[non_exhaustive]
+#[derive(Debug)]
 enum AmqpMethod {
     Connection      = 10,
     Channel         = 20,
@@ -27,6 +40,7 @@ enum AmqpMethod {
 }
 
 #[non_exhaustive]
+#[derive(Debug)]
 enum ConnectionMethod {
     Start           = 10,
     StartOk         = 11,
@@ -41,6 +55,7 @@ enum ConnectionMethod {
 }
 
 #[non_exhaustive]
+#[derive(Debug)]
 enum ChannelMethod {
     Open            = 10,
     OpenOk          = 11,
@@ -51,6 +66,7 @@ enum ChannelMethod {
 }
 
 #[non_exhaustive]
+#[derive(Debug)]
 enum ExchangeMethod {
     Declare         = 10,
     DeclareOk       = 11,
@@ -59,6 +75,7 @@ enum ExchangeMethod {
 }
 
 #[non_exhaustive]
+#[derive(Debug)]
 enum QueueMethod {
     Declare         = 10,
     DeclareOk       = 11,
@@ -73,6 +90,7 @@ enum QueueMethod {
 }
 
 #[non_exhaustive]
+#[derive(Debug)]
 enum BasicMethod {
     Qos             = 10,
     QosOk           = 11,
@@ -94,6 +112,7 @@ enum BasicMethod {
 }
 
 #[non_exhaustive]
+#[derive(Debug)]
 enum TxMethod {
     Select          = 10,
     SelectOk        = 11,
@@ -105,6 +124,7 @@ enum TxMethod {
 
 #[repr(u8)]
 #[non_exhaustive]
+#[derive(Debug)]
 enum AmqpDataType {
     Bool            = 't' as u8,
     I8              = 'b' as u8,
@@ -126,6 +146,7 @@ enum AmqpDataType {
     None            = 'V' as u8,
 }
 
+#[derive(Debug)]
 enum AmqpData {
     I8(i8),
     U8(u8),
