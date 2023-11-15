@@ -293,11 +293,11 @@ impl<'buffer> AmqpFrameReader<'buffer> {
 
     fn read_array(&mut self) -> Result<Vec<AmqpData>, AmqpFrameError> {
         let mut bytes_to_read = self.read_u32()? as usize;
-        let bytes_before = self.bytes_available();
-
         let mut result = Vec::new();
 
         while bytes_to_read > 0 {
+            let bytes_before = self.bytes_available();
+
             let value_type = self.read_u8()?;
             let value = self.read_value(value_type)?;
 
