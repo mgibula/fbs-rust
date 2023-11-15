@@ -5,10 +5,8 @@ use fbs_library::system_error::SystemError;
 use fbs_runtime::{async_connect, async_write, async_read_into};
 use fbs_runtime::resolver::{resolve_address, ResolveAddressError};
 
-use crate::defines::{AmqpFrameType};
-
-use super::frame::{AmqpProtocolHeader};
-use super::frame_reader::{AmqpFrame, AmqpFrameReader, AmqpFrameError};
+use super::frame::{AmqpProtocolHeader, AmqpFrame, AmqpFrameError};
+use super::frame_reader::AmqpFrameReader;
 
 use thiserror::Error;
 

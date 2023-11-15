@@ -1,90 +1,9 @@
-use std::{collections::HashMap, string::FromUtf8Error};
-use thiserror::Error;
-
-use crate::defines::{AMQP_CLASS_CONNECTION, AMQP_METHOD_CONNECTION_START};
+use std::collections::HashMap;
+use super::frame::{AmqpFrameError, AmqpFrame, AmqpFramePayload, AmqpMethod, AmqpData};
+use super::defines::{AMQP_CLASS_CONNECTION, AMQP_METHOD_CONNECTION_START};
 
 pub struct AmqpFrameReader<'buffer> {
     data: &'buffer [u8],
-}
-
-#[derive(Debug, Clone)]
-pub struct AmqpFrame {
-    channel: u16,
-    payload: AmqpFramePayload,
-}
-
-#[derive(Debug, Clone)]
-enum AmqpFramePayload {
-    Method(AmqpMethod),
-    Header(AmqpHeaderFrame),
-    Content(AmqpContentFrame),
-    Heartbeat(AmqpHeartbeatFrame),
-}
-
-#[derive(Debug, Clone)]
-enum AmqpMethod {
-    ConnectionStart(u8, u8, HashMap<String, AmqpData>, String, String),
-    // Channel(ChannelMethod),
-    // Exchange(ExchangeMethod),
-    // Queue(QueueMethod),
-    // Basic(BasicMethod),
-    // Tx(TxMethod),
-}
-
-#[derive(Debug, Clone)]
-enum AmqpConnectionMethod {
-    Start(u8, u8, HashMap<String, AmqpData>, String, String),
-}
-
-#[derive(Debug, Clone)]
-struct AmqpHeaderFrame {
-
-}
-
-#[derive(Debug, Clone)]
-struct AmqpContentFrame {
-
-}
-
-#[derive(Debug, Clone)]
-struct AmqpHeartbeatFrame {
-
-}
-
-#[derive(Debug, Clone)]
-pub enum AmqpData {
-    None,
-    Bool(bool),
-    I8(i8),
-    U8(u8),
-    I16(i16),
-    U16(u16),
-    I32(i32),
-    U32(u32),
-    I64(i64),
-    U64(u64),
-    Float(f32),
-    Double(f64),
-    Decimal(u8, u32),
-    ShortString(String),
-    LongString(String),
-    FieldArray(Vec<AmqpData>),
-    Timestamp(u64),
-    FieldTable(HashMap<String, AmqpData>),
-}
-
-#[derive(Error, Debug)]
-pub enum AmqpFrameError {
-    #[error("Buffer too short")]
-    BufferTooShort,
-    #[error("Invalid frame type")]
-    InvalidFrameType(u8),
-    #[error("Invalid class/method")]
-    InvalidClassMethod(u16, u16),
-    #[error("Invalid string utf-8 format")]
-    InvalidStringFormat(#[from] FromUtf8Error),
-    #[error("Invalid field type")]
-    InvalidFieldType(u8),
 }
 
 impl<'buffer> AmqpFrameReader<'buffer> {
@@ -321,7 +240,7 @@ impl<'buffer> AmqpFrameReader<'buffer> {
             b'l' => Ok(AmqpData::U64(self.read_u64()?)),
             b'f' => Ok(AmqpData::Float(self.read_f32()?)),
             b'd' => Ok(AmqpData::Double(self.read_f64()?)),
-            b'D' => panic!("decimal value ?"),
+            b'D' => Ok(AmqpData::Decimal(self.read_u8()?, self.read_u32()?)),
             b's' => Ok(AmqpData::ShortString(self.read_short_string()?)),
             b'S' => Ok(AmqpData::LongString(self.read_long_string()?)),
             b'T' => Ok(AmqpData::Timestamp(self.read_u64()?)),
