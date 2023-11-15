@@ -1,6 +1,7 @@
 use std::collections::HashMap;
+
 use super::frame::{AmqpFrameError, AmqpFrame, AmqpFramePayload, AmqpMethod, AmqpData};
-use super::defines::{AMQP_CLASS_CONNECTION, AMQP_METHOD_CONNECTION_START};
+use super::defines::*;
 
 pub struct AmqpFrameReader<'buffer> {
     data: &'buffer [u8],
@@ -32,6 +33,26 @@ impl<'buffer> AmqpFrameReader<'buffer> {
                 let locales = self.read_long_string()?;
                 Ok(AmqpMethod::ConnectionStart(major, minor, properties, mechanisms, locales))
             },
+            (AMQP_CLASS_CONNECTION, AMQP_METHOD_CONNECTION_TUNE) => {
+                let channel_max = self.read_u16()?;
+                let frame_max = self.read_u32()?;
+                let heartbeat = self.read_u16()?;
+                Ok(AmqpMethod::ConnectionTune(channel_max, frame_max, heartbeat))
+            },
+            (AMQP_CLASS_CONNECTION, AMQP_METHOD_CONNECTION_OPEN_OK) => {
+                Ok(AmqpMethod::ConnectionOpenOk())
+            },
+            (AMQP_CLASS_CONNECTION, AMQP_METHOD_CONNECTION_CLOSE) => {
+                let reply_code = self.read_u16()?;
+                let reply_text = self.read_short_string()?;
+                let class_id = self.read_u16()?;
+                let method_id = self.read_u16()?;
+
+                Ok(AmqpMethod::ConnectionClose(reply_code, reply_text, class_id, method_id))
+            },
+            (AMQP_CLASS_CONNECTION, AMQP_METHOD_CONNECTION_CLOSE_OK) => {
+                Ok(AmqpMethod::ConnectionCloseOk())
+            }
             (_, _) => Err(AmqpFrameError::InvalidClassMethod(class_id, method_id))
         }
     }

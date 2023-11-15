@@ -44,6 +44,32 @@ impl FrameWriter {
                 write_long_string(&mut result, response);
                 write_short_string(&mut result, locale);
             },
+            AmqpMethod::ConnectionTuneOk(channel_max, frame_max, heartbeat) => {
+                write_u16(&mut result, AMQP_CLASS_CONNECTION);
+                write_u16(&mut result, AMQP_METHOD_CONNECTION_TUNE_OK);
+                write_u16(&mut result, *channel_max);
+                write_u32(&mut result, *frame_max);
+                write_u16(&mut result, *heartbeat);
+            },
+            AmqpMethod::ConnectionOpen(vhost) => {
+                write_u16(&mut result, AMQP_CLASS_CONNECTION);
+                write_u16(&mut result, AMQP_METHOD_CONNECTION_OPEN);
+                write_short_string(&mut result, vhost);
+                write_short_string(&mut result, "");    // deprecated but necessary
+                write_u8(&mut result, b'\x00');         // deprecated but necessary
+            },
+            AmqpMethod::ConnectionClose(reply_code, reply_text, class_id, method_id) => {
+                write_u16(&mut result, AMQP_CLASS_CONNECTION);
+                write_u16(&mut result, AMQP_METHOD_CONNECTION_CLOSE);
+                write_u16(&mut result, *reply_code);
+                write_short_string(&mut result, reply_text);
+                write_u16(&mut result, *class_id);
+                write_u16(&mut result, *method_id);
+            },
+            AmqpMethod::ConnectionCloseOk() => {
+                write_u16(&mut result, AMQP_CLASS_CONNECTION);
+                write_u16(&mut result, AMQP_METHOD_CONNECTION_CLOSE_OK);
+            },
             _ => panic!("Attempting to write unsupported frame type"),
         }
 

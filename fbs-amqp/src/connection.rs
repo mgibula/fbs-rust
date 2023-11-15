@@ -1,5 +1,7 @@
+use std::cell::RefCell;
 use std::cmp::min;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use fbs_library::socket::{Socket, SocketDomain, SocketType, SocketFlags};
 use fbs_library::system_error::SystemError;
@@ -33,15 +35,29 @@ pub enum AmqpConnectionError {
 }
 
 pub struct AmqpConnection {
+    ptr: Rc<RefCell<AmqpConnectionInternal>>,
+}
+
+impl AmqpConnection {
+    pub fn new(address: String) -> Self {
+        Self { ptr: Rc::new(RefCell::new(AmqpConnectionInternal::new(address))) }
+    }
+
+    pub async fn connect(&mut self, username: &str, password: &str) -> Result<(), AmqpConnectionError> {
+        self.ptr.borrow_mut().connect(username, password).await
+    }
+}
+
+pub struct AmqpConnectionInternal {
     fd: Socket,
     address: String,
     read_buffer: Vec<u8>,
     read_offset: usize,
 }
 
-impl AmqpConnection {
-    pub fn new(address: String) -> Self {
-        AmqpConnection {
+impl AmqpConnectionInternal {
+    fn new(address: String) -> Self {
+        AmqpConnectionInternal {
             fd: Socket::new(SocketDomain::Inet, SocketType::Stream, SocketFlags::new().close_on_exec(true).flags()),
             address,
             read_buffer: Vec::with_capacity(4096),
@@ -49,7 +65,7 @@ impl AmqpConnection {
         }
     }
 
-    pub async fn connect(&mut self) -> Result<(), AmqpConnectionError> {
+    async fn connect(&mut self, username: &str, password: &str) -> Result<(), AmqpConnectionError> {
         let address = resolve_address(self.address.as_str(), Some(5672)).await?;
         let connected = async_connect(&self.fd, address).await;
         match connected {
@@ -68,9 +84,9 @@ impl AmqpConnection {
 
         let mut sasl = String::new();
         sasl.push('\x00');
-        sasl.push_str("guest");
+        sasl.push_str(username);
         sasl.push('\x00');
-        sasl.push_str("guest");
+        sasl.push_str(password);
 
         let response = AmqpFrame {
             channel: 0,
@@ -78,6 +94,36 @@ impl AmqpConnection {
         };
 
         self.write_frame(&response).await?;
+
+        let frame = self.read_frame().await?;
+        dbg!(frame);
+
+        let response = AmqpFrame {
+            channel: 0,
+            payload: AmqpFramePayload::Method(AmqpMethod::ConnectionTuneOk(100, 4096, 0)),
+        };
+
+        self.write_frame(&response).await?;
+
+        let response = AmqpFrame {
+            channel: 0,
+            payload: AmqpFramePayload::Method(AmqpMethod::ConnectionOpen("/".to_string())),
+        };
+
+        self.write_frame(&response).await?;
+
+        let frame = self.read_frame().await?;
+        dbg!(frame);
+
+        let response = AmqpFrame {
+            channel: 0,
+            payload: AmqpFramePayload::Method(AmqpMethod::ConnectionClose(0, "shutdown".to_string(), 0, 0)),
+        };
+
+        self.write_frame(&response).await?;
+
+        let frame = self.read_frame().await?;
+        dbg!(frame);
 
         Ok(())
     }
@@ -176,7 +222,7 @@ mod tests {
     fn bad_connect_test() {
         async_run(async {
             let mut amqp = AmqpConnection::new("asd".to_string());
-            let result = amqp.connect().await;
+            let result = amqp.connect("guest", "guest").await;
             assert!(result.is_err());
         });
     }
@@ -185,7 +231,7 @@ mod tests {
     fn good_connect_test() {
         async_run(async {
             let mut amqp = AmqpConnection::new("localhost".to_string());
-            let _ = amqp.connect().await;
+            let _ = amqp.connect("guest", "guest").await;
         });
     }
 }

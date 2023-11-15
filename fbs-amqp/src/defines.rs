@@ -60,8 +60,6 @@ pub const AMQP_METHOD_CONNECTION_OPEN_OK: u16   = 41;
 pub const AMQP_METHOD_CONNECTION_CLOSE: u16     = 50;
 pub const AMQP_METHOD_CONNECTION_CLOSE_OK: u16  = 51;
 
-
-
 #[derive(Debug, Clone)]
 enum AmqpChannelMethodId {
     Open            = 10,

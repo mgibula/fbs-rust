@@ -35,6 +35,12 @@ pub enum AmqpFramePayload {
 pub enum AmqpMethod {
     ConnectionStart(u8, u8, HashMap<String, AmqpData>, String, String),     // version-major, version-minor, server-properties, mechanisms, locales
     ConnectionStartOk(HashMap<String, AmqpData>, String, String, String),   // client-properties, mechanism, response, locale
+    ConnectionTune(u16, u32, u16),                                          // channel-max, frame-max, heartbeat
+    ConnectionTuneOk(u16, u32, u16),                                        // channel-max, frame-max, heartbeat
+    ConnectionOpen(String),                                                 // virtual host
+    ConnectionOpenOk(),
+    ConnectionClose(u16, String, u16, u16),                                 // reply-code, reply-text, class-id, method-id
+    ConnectionCloseOk(),
     // Channel(ChannelMethod),
     // Exchange(ExchangeMethod),
     // Queue(QueueMethod),
