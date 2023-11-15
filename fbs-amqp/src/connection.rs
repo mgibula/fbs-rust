@@ -1,12 +1,14 @@
 use std::cmp::min;
+use std::collections::HashMap;
 
 use fbs_library::socket::{Socket, SocketDomain, SocketType, SocketFlags};
 use fbs_library::system_error::SystemError;
 use fbs_runtime::{async_connect, async_write, async_read_into};
 use fbs_runtime::resolver::{resolve_address, ResolveAddressError};
 
-use super::frame::{AmqpProtocolHeader, AmqpFrame, AmqpFrameError};
+use super::frame::{AmqpProtocolHeader, AmqpFrame, AmqpFrameError, AmqpFramePayload, AmqpMethod};
 use super::frame_reader::AmqpFrameReader;
+use super::frame_writer::FrameWriter;
 
 use thiserror::Error;
 
@@ -63,6 +65,19 @@ impl AmqpConnection {
 
         let frame = self.read_frame().await?;
         dbg!(frame);
+
+        let mut sasl = String::new();
+        sasl.push('\x00');
+        sasl.push_str("guest");
+        sasl.push('\x00');
+        sasl.push_str("guest");
+
+        let response = AmqpFrame {
+            channel: 0,
+            payload: AmqpFramePayload::Method(AmqpMethod::ConnectionStartOk(HashMap::new(), "PLAIN".to_string(), sasl, String::new())),
+        };
+
+        self.write_frame(&response).await?;
 
         Ok(())
     }
@@ -137,6 +152,18 @@ impl AmqpConnection {
 
         let mut reader = AmqpFrameReader::new(&payload);
         Ok(reader.read_frame(frame_type, channel)?)
+    }
+
+    async fn write_frame(&mut self, frame: &AmqpFrame) -> Result<(), AmqpConnectionError> {
+        let data = FrameWriter::write_frame(frame);
+        let result = async_write(&self.fd, data, None).await;
+
+        match result {
+            Ok(_) => (),
+            Err((error, _)) => return Err(AmqpConnectionError::WriteError(error)),
+        }
+
+        Ok(())
     }
 }
 
