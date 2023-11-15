@@ -5,9 +5,10 @@ use fbs_library::system_error::SystemError;
 use fbs_runtime::{async_connect, async_write, async_read_into};
 use fbs_runtime::resolver::{resolve_address, ResolveAddressError};
 
-use crate::defines::{AmqpFrame, AmqpFrameType, AmqpFrameError};
+use crate::defines::{AmqpFrameType};
 
 use super::frame::{AmqpProtocolHeader};
+use super::frame_reader::{AmqpFrame, AmqpFrameReader, AmqpFrameError};
 
 use thiserror::Error;
 
@@ -27,7 +28,7 @@ pub enum AmqpConnectionError {
     FrameTypeUnknown(u8),
     #[error("Invalid frame end")]
     ProtocolFrameEndInvalid,
-    #[error("Method error")]
+    #[error("Frame error")]
     FrameError(#[from] AmqpFrameError)
 }
 
@@ -130,29 +131,14 @@ impl AmqpConnection {
         let channel = self.read_u16().await?;
         let payload_size = self.read_u32().await? as usize;
 
-        let mut payload = Vec::<u8>::with_capacity(payload_size);
+        let mut payload = Vec::with_capacity(payload_size);
         payload.resize(payload_size, b'\x00');
 
         self.read_bytes(&mut payload).await?;
         let frame_end = self.read_u8().await?;
 
-        match frame_type {
-            frame_type if frame_type == AmqpFrameType::Method as u8 => {
-                Ok(AmqpFrame::new_method_frame(channel, &payload)?)
-            },
-            frame_type if frame_type == AmqpFrameType::Header as u8 => {
-                Ok(AmqpFrame::new_header_frame(channel, &payload)?)
-            },
-            frame_type if frame_type == AmqpFrameType::Body as u8 => {
-                Ok(AmqpFrame::new_content_frame(channel, &payload)?)
-            },
-            frame_type if frame_type == AmqpFrameType::Heartbeat as u8 => {
-                Ok(AmqpFrame::new_heartbeat_frame(channel, &payload)?)
-            }
-            _ => {
-                Err(AmqpConnectionError::FrameTypeUnknown(frame_type))
-            }
-        }
+        let mut reader = AmqpFrameReader::new(&payload);
+        Ok(reader.read_frame(frame_type, channel)?)
     }
 }
 

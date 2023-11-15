@@ -1,155 +1,6 @@
-use std::collections::HashMap;
 use thiserror::Error;
-use crate::buffer::BufferTooShort;
-
-use super::buffer::ReadBuffer;
 
 pub const PROTOCOL_HEADER: &[u8] = b"AMQP\x00\x00\x09\x01";
-
-#[derive(Debug, Clone)]
-struct AmqpMethodFrame {
-    method: AmqpMethod,
-}
-
-#[derive(Debug, Clone)]
-struct AmqpHeaderFrame {
-
-}
-
-#[derive(Debug, Clone)]
-struct AmqpContentFrame {
-
-}
-
-#[derive(Debug, Clone)]
-struct AmqpHeartbeatFrame {
-
-}
-
-#[derive(Debug, Clone)]
-enum AmqpFramePayload {
-    Method(AmqpMethod),
-    Header(AmqpHeaderFrame),
-    Content(AmqpContentFrame),
-    Heartbeat(AmqpHeartbeatFrame),
-}
-
-#[derive(Debug, Clone)]
-pub struct AmqpFrame {
-    channel: u16,
-    payload: AmqpFramePayload,
-}
-
-#[derive(Debug, Error)]
-pub enum AmqpFrameError {
-    #[error("Method error")]
-    MethodError(#[from] AmqpMethodError)
-}
-
-impl AmqpFrame {
-    pub fn new_method_frame(channel: u16, payload: &[u8]) -> Result<Self, AmqpFrameError> {
-        Ok(Self { channel, payload: AmqpFramePayload::Method(AmqpMethod::from_buffer(payload)?) })
-    }
-
-    pub fn new_header_frame(channel: u16, payload: &[u8]) -> Result<Self, AmqpFrameError> {
-        Ok(Self { channel, payload: AmqpFramePayload::Header(AmqpHeaderFrame { }) })
-    }
-
-    pub fn new_content_frame(channel: u16, payload: &[u8]) -> Result<Self, AmqpFrameError> {
-        Ok(Self { channel, payload: AmqpFramePayload::Content(AmqpContentFrame { }) })
-    }
-
-    pub fn new_heartbeat_frame(channel: u16, payload: &[u8]) -> Result<Self, AmqpFrameError> {
-        Ok(Self { channel, payload: AmqpFramePayload::Heartbeat(AmqpHeartbeatFrame { }) })
-    }
-}
-
-#[derive(Debug, Clone)]
-enum AmqpMethod {
-    Connection(AmqpConnectionMethod),
-    // Channel(ChannelMethod),
-    // Exchange(ExchangeMethod),
-    // Queue(QueueMethod),
-    // Basic(BasicMethod),
-    // Tx(TxMethod),
-}
-
-#[derive(Debug, Clone)]
-enum AmqpConnectionMethod {
-    Start(u8, u8, u32, String, String),
-}
-
-#[derive(Error, Debug)]
-pub enum AmqpMethodError {
-    #[error("Method unknown")]
-    MethodUnknown(u16),
-    #[error("Received data format invalid")]
-    FormatError(#[from] BufferTooShort),
-}
-
-impl AmqpMethod {
-    pub fn from_buffer(buffer: &[u8]) -> Result<AmqpMethod, AmqpMethodError> {
-        let mut buffer = ReadBuffer::new(buffer);
-        let class_id = buffer.read_u16()?;
-        let method_id = buffer.read_u16()?;
-
-        match class_id {
-            class_id if class_id == AmqpClassId::Connection as u16 => {
-                Self::new_connection_method(method_id, &mut buffer)
-            },
-            class_id if class_id == AmqpClassId::Channel as u16 => {
-                Self::new_channel_method(method_id, &mut buffer)
-            },
-            class_id if class_id == AmqpClassId::Exchange as u16 => {
-                Self::new_exchange_method(method_id, &mut buffer)
-            },
-            class_id if class_id == AmqpClassId::Queue as u16 => {
-                Self::new_queue_method(method_id, &mut buffer)
-            },
-            class_id if class_id == AmqpClassId::Basic as u16 => {
-                Self::new_basic_method(method_id, &mut buffer)
-            },
-            class_id if class_id == AmqpClassId::Tx as u16 => {
-                Self::new_tx_method(method_id, &mut buffer)
-            },
-            _ => return Err(AmqpMethodError::MethodUnknown(class_id)),
-        }
-    }
-
-    fn new_connection_method(method_id: u16, buffer: &mut ReadBuffer) -> Result<AmqpMethod, AmqpMethodError> {
-        match method_id {
-            method_id if method_id == AmqpConnectionMethodId::Start as u16 => {
-                let major = buffer.read_u8()?;
-                let minor = buffer.read_u8()?;
-
-                let table_count = buffer.read_u32()?;
-                let field1 = buffer.read_short_string()?;
-                Ok(AmqpMethod::Connection(AmqpConnectionMethod::Start(major, minor, table_count, field1, String::new())))
-            },
-            _ => return Err(AmqpMethodError::MethodUnknown(method_id))
-        }
-    }
-
-    fn new_channel_method(method_id: u16, buffer: &mut ReadBuffer) -> Result<AmqpMethod, AmqpMethodError> {
-        unimplemented!()
-    }
-
-    fn new_exchange_method(method_id: u16, buffer: &mut ReadBuffer) -> Result<AmqpMethod, AmqpMethodError> {
-        unimplemented!()
-    }
-
-    fn new_queue_method(method_id: u16, buffer: &mut ReadBuffer) -> Result<AmqpMethod, AmqpMethodError> {
-        unimplemented!()
-    }
-
-    fn new_basic_method(method_id: u16, buffer: &mut ReadBuffer) -> Result<AmqpMethod, AmqpMethodError> {
-        unimplemented!()
-    }
-
-    fn new_tx_method(method_id: u16, buffer: &mut ReadBuffer) -> Result<AmqpMethod, AmqpMethodError> {
-        unimplemented!()
-    }
-}
 
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]
@@ -159,6 +10,11 @@ pub enum AmqpFrameType {
     Body            = 3,
     Heartbeat       = 4,
 }
+
+pub const AMQP_FRAME_TYPE_METHOD: u8            = 1;
+pub const AMQP_FRAME_TYPE_HEADER: u8            = 2;
+pub const AMQP_FRAME_TYPE_CONTENT: u8           = 3;
+pub const AMQP_FRAME_TYPE_HEARTBEAT: u8         = 4;
 
 #[derive(Debug, Clone, Copy)]
 #[repr(u16)]
@@ -170,6 +26,13 @@ enum AmqpClassId {
     Basic           = 60,
     Tx              = 90,
 }
+
+pub const AMQP_CLASS_CONNECTION: u16            = 10;
+pub const AMQP_CLASS_CHANNEL: u16               = 20;
+pub const AMQP_CLASS_EXCHANGE: u16              = 40;
+pub const AMQP_CLASS_QUEUE: u16                 = 50;
+pub const AMQP_CLASS_BASIC: u16                 = 60;
+pub const AMQP_CLASS_TX: u16                    = 90;
 
 #[derive(Debug, Clone)]
 #[repr(u16)]
@@ -185,6 +48,19 @@ enum AmqpConnectionMethodId {
     Close           = 50,
     CloseOk         = 51,
 }
+
+pub const AMQP_METHOD_CONNECTION_START: u16     = 10;
+pub const AMQP_METHOD_CONNECTION_START_OK: u16  = 11;
+pub const AMQP_METHOD_CONNECTION_SECURE: u16    = 20;
+pub const AMQP_METHOD_CONNECTION_SECURE_OK: u16 = 21;
+pub const AMQP_METHOD_CONNECTION_TUNE: u16      = 30;
+pub const AMQP_METHOD_CONNECTION_TUNE_OK: u16   = 31;
+pub const AMQP_METHOD_CONNECTION_OPEN: u16      = 40;
+pub const AMQP_METHOD_CONNECTION_OPEN_OK: u16   = 41;
+pub const AMQP_METHOD_CONNECTION_CLOSE: u16     = 50;
+pub const AMQP_METHOD_CONNECTION_CLOSE_OK: u16  = 51;
+
+
 
 #[derive(Debug, Clone)]
 enum AmqpChannelMethodId {
@@ -272,28 +148,3 @@ enum AmqpDataType {
     None            = 'V' as u8,
 }
 
-#[derive(Debug, Clone)]
-pub enum AmqpData {
-    I8(i8),
-    U8(u8),
-    I16(i16),
-    U16(u16),
-    I32(i32),
-    U32(u32),
-    I64(i64),
-    U64(u64),
-    Float(f32),
-    Double(f64),
-    Decimal(u8, u32),
-    ShortString(Vec<u8>),
-    LongString(Vec<u8>),
-    FieldArray(Vec<AmqpData>),
-    Timestamp(u64),
-    FieldTable(HashMap<String, AmqpData>),
-}
-
-impl AmqpData {
-    pub fn from_buffer(buffer: &[u8]) -> Result<AmqpData, AmqpMethodError> {
-        unimplemented!()
-    }
-}
