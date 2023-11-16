@@ -16,7 +16,6 @@ impl Into<Vec<u8>> for AmqpProtocolHeader {
     }
 }
 
-
 #[derive(Debug, Clone)]
 pub struct AmqpFrame {
     pub channel: u16,
@@ -41,6 +40,8 @@ pub enum AmqpMethod {
     ConnectionOpenOk(),
     ConnectionClose(u16, String, u16, u16),                                 // reply-code, reply-text, class-id, method-id
     ConnectionCloseOk(),
+    ChannelOpen(),
+    ChannelOpenOk(),
     // Channel(ChannelMethod),
     // Exchange(ExchangeMethod),
     // Queue(QueueMethod),

@@ -8,5 +8,6 @@ edition = "2021"
 [dependencies]
 fbs-library = { path = "../fbs-library" }
 fbs-runtime = { path = "../fbs-runtime" }
+fbs-executor = { path = "../fbs-executor" }
 libc = "0.2.147"
 thiserror = "1.0.40"

@@ -70,6 +70,13 @@ enum AmqpChannelMethodId {
     CloseOk         = 41,
 }
 
+pub const AMQP_METHOD_CHANNEL_OPEN: u16         = 10;
+pub const AMQP_METHOD_CHANNEL_OPEN_OK: u16      = 11;
+pub const AMQP_METHOD_CHANNEL_FLOW: u16         = 20;
+pub const AMQP_METHOD_CHANNEL_FLOW_OK: u16      = 21;
+pub const AMQP_METHOD_CHANNEL_CLOSE: u16        = 40;
+pub const AMQP_METHOD_CHANNEL_CLOSE_OK: u16     = 41;
+
 #[derive(Debug, Clone)]
 enum AmqpExchangeMethodId {
     Declare         = 10,

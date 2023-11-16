@@ -52,7 +52,11 @@ impl<'buffer> AmqpFrameReader<'buffer> {
             },
             (AMQP_CLASS_CONNECTION, AMQP_METHOD_CONNECTION_CLOSE_OK) => {
                 Ok(AmqpMethod::ConnectionCloseOk())
-            }
+            },
+            (AMQP_CLASS_CHANNEL, AMQP_METHOD_CHANNEL_OPEN_OK) => {
+                let _ = self.read_long_string()?;   // deprecated arg
+                Ok(AmqpMethod::ChannelOpenOk())
+            },
             (_, _) => Err(AmqpFrameError::InvalidClassMethod(class_id, method_id))
         }
     }

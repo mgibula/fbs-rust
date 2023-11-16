@@ -70,6 +70,11 @@ impl FrameWriter {
                 write_u16(&mut result, AMQP_CLASS_CONNECTION);
                 write_u16(&mut result, AMQP_METHOD_CONNECTION_CLOSE_OK);
             },
+            AmqpMethod::ChannelOpen() => {
+                write_u16(&mut result, AMQP_CLASS_CHANNEL);
+                write_u16(&mut result, AMQP_METHOD_CHANNEL_OPEN);
+                write_short_string(&mut result, "");    // deprecated but necessary
+            },
             _ => panic!("Attempting to write unsupported frame type"),
         }
 

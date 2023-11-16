@@ -1,12 +1,15 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::cmp::min;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 
 use fbs_library::socket::{Socket, SocketDomain, SocketType, SocketFlags};
 use fbs_library::system_error::SystemError;
-use fbs_runtime::{async_connect, async_write, async_read_into};
+use fbs_library::indexed_list::IndexedList;
+use fbs_runtime::async_utils::{AsyncSignal, AsyncChannelRx, AsyncChannelTx, async_channel_create};
+use fbs_runtime::{async_connect, async_write, async_read_into, async_spawn};
 use fbs_runtime::resolver::{resolve_address, ResolveAddressError};
+use fbs_executor::TaskHandle;
 
 use super::frame::{AmqpProtocolHeader, AmqpFrame, AmqpFrameError, AmqpFramePayload, AmqpMethod};
 use super::frame_reader::AmqpFrameReader;
@@ -29,103 +32,111 @@ pub enum AmqpConnectionError {
     #[error("Invalid type frame")]
     FrameTypeUnknown(u8),
     #[error("Invalid frame end")]
-    ProtocolFrameEndInvalid,
+    FrameEndInvalid,
     #[error("Frame error")]
     FrameError(#[from] AmqpFrameError)
 }
 
 pub struct AmqpConnection {
-    ptr: Rc<RefCell<AmqpConnectionInternal>>,
+    ptr: Rc<AmqpConnectionInternal>,
+    address: String,
+}
+
+#[derive(Clone)]
+pub struct AmqpChannel {
+    ptr: Rc<AmqpChannelInternals>,
+}
+
+impl AmqpChannel {
+    fn new(connection: Rc<AmqpConnectionInternal>) -> Self {
+        Self { ptr: Rc::new(AmqpChannelInternals::new(connection)) }
+    }
+}
+
+struct AmqpChannelInternals {
+    connection: Rc<AmqpConnectionInternal>,
+    callbacks: RefCell<VecDeque<Box<dyn Fn(&AmqpFrame) -> bool>>>,
+    number: Cell<usize>,
+}
+
+impl AmqpChannelInternals {
+    fn new(connection: Rc<AmqpConnectionInternal>) -> Self {
+        Self { connection, callbacks: RefCell::new(VecDeque::new()), number: Cell::new(0) }
+    }
+
+    fn add_callback(&self, callback: Box<dyn Fn(&AmqpFrame) -> bool>) {
+        self.callbacks.borrow_mut().push_back(callback)
+    }
+
+    fn handle_frame(&self, frame: &AmqpFrame) {
+        let mut callbacks = self.callbacks.borrow_mut();
+        let mut index = 0;
+        let mut handled = false;
+        for callback in callbacks.iter_mut() {
+            handled = callback(frame);
+            index += 1;
+
+            if handled {
+                break;
+            }
+        }
+
+        if handled {
+            callbacks.remove(index);
+        }
+    }
 }
 
 impl AmqpConnection {
     pub fn new(address: String) -> Self {
-        Self { ptr: Rc::new(RefCell::new(AmqpConnectionInternal::new(address))) }
+        Self { ptr: Rc::new(AmqpConnectionInternal::new()), address }
     }
 
     pub async fn connect(&mut self, username: &str, password: &str) -> Result<(), AmqpConnectionError> {
-        self.ptr.borrow_mut().connect(username, password).await
+        let result = self.ptr.connect(&self.address, username, password, self.ptr.clone()).await;
+
+        result
+    }
+
+    pub async fn open_channel(&mut self) -> Result<AmqpChannel, AmqpConnectionError> {
+        let channel = AmqpChannel::new(self.ptr.clone());
+        let index = self.ptr.set_channel(&channel);
+        channel.ptr.number.set(index);
+
+        let receiver = AsyncSignal::new();
+        let sender = receiver.clone();
+
+        channel.ptr.add_callback(Box::new(move |frame| {
+            match frame.payload {
+                AmqpFramePayload::Method(AmqpMethod::ChannelOpenOk()) => {
+                    sender.signal();
+                    true
+                },
+                _ => false,
+            }
+        }));
+
+        let frame = AmqpFrame {
+            channel: (index + 1) as u16,
+            payload: AmqpFramePayload::Method(AmqpMethod::ChannelOpen()),
+        };
+
+        self.ptr.writer_queue.send(frame);
+
+        receiver.wait().await;
+        Ok(channel)
     }
 }
 
-pub struct AmqpConnectionInternal {
-    fd: Socket,
-    address: String,
+struct AmqpConnectionReader {
+    fd: Rc<Socket>,
     read_buffer: Vec<u8>,
     read_offset: usize,
 }
 
-impl AmqpConnectionInternal {
-    fn new(address: String) -> Self {
-        AmqpConnectionInternal {
-            fd: Socket::new(SocketDomain::Inet, SocketType::Stream, SocketFlags::new().close_on_exec(true).flags()),
-            address,
-            read_buffer: Vec::with_capacity(4096),
-            read_offset: 0,
-        }
-    }
-
-    async fn connect(&mut self, username: &str, password: &str) -> Result<(), AmqpConnectionError> {
-        let address = resolve_address(self.address.as_str(), Some(5672)).await?;
-        let connected = async_connect(&self.fd, address).await;
-        match connected {
-            Ok(_) => (),
-            Err(error) => return Err(AmqpConnectionError::ConnectError(error)),
-        };
-
-        let written = async_write(&self.fd, AmqpProtocolHeader::new().into(), None).await;
-        match written {
-            Ok(_) => (),
-            Err((error, _)) => return Err(AmqpConnectionError::WriteError(error)),
-        }
-
-        let frame = self.read_frame().await?;
-        dbg!(frame);
-
-        let mut sasl = String::new();
-        sasl.push('\x00');
-        sasl.push_str(username);
-        sasl.push('\x00');
-        sasl.push_str(password);
-
-        let response = AmqpFrame {
-            channel: 0,
-            payload: AmqpFramePayload::Method(AmqpMethod::ConnectionStartOk(HashMap::new(), "PLAIN".to_string(), sasl, String::new())),
-        };
-
-        self.write_frame(&response).await?;
-
-        let frame = self.read_frame().await?;
-        dbg!(frame);
-
-        let response = AmqpFrame {
-            channel: 0,
-            payload: AmqpFramePayload::Method(AmqpMethod::ConnectionTuneOk(100, 4096, 0)),
-        };
-
-        self.write_frame(&response).await?;
-
-        let response = AmqpFrame {
-            channel: 0,
-            payload: AmqpFramePayload::Method(AmqpMethod::ConnectionOpen("/".to_string())),
-        };
-
-        self.write_frame(&response).await?;
-
-        let frame = self.read_frame().await?;
-        dbg!(frame);
-
-        let response = AmqpFrame {
-            channel: 0,
-            payload: AmqpFramePayload::Method(AmqpMethod::ConnectionClose(0, "shutdown".to_string(), 0, 0)),
-        };
-
-        self.write_frame(&response).await?;
-
-        let frame = self.read_frame().await?;
-        dbg!(frame);
-
-        Ok(())
+impl AmqpConnectionReader {
+    fn new(fd: Rc<Socket>) -> Self {
+        Self { fd, read_buffer: Vec::with_capacity(4096), read_offset: 0 }
     }
 
     async fn fill_buffer(&mut self) -> Result<usize, AmqpConnectionError> {
@@ -194,10 +205,193 @@ impl AmqpConnectionInternal {
         payload.resize(payload_size, b'\x00');
 
         self.read_bytes(&mut payload).await?;
+
         let frame_end = self.read_u8().await?;
+        if frame_end != b'\xCE' {
+            return Err(AmqpConnectionError::FrameEndInvalid);
+        }
 
         let mut reader = AmqpFrameReader::new(&payload);
         Ok(reader.read_frame(frame_type, channel)?)
+    }
+}
+
+struct AmqpConnectionWriter {
+    fd: Rc<Socket>,
+    queue: VecDeque<AmqpFrame>,
+}
+
+impl AmqpConnectionWriter {
+    fn new(fd: Rc<Socket>) -> Self {
+        Self { fd, queue: VecDeque::new() }
+    }
+
+    fn enqueue_frame(&mut self, frame: AmqpFrame) {
+        self.queue.push_back(frame);
+    }
+
+    async fn flush_all(&mut self) -> Result<(), AmqpConnectionError> {
+        loop {
+            let frame = self.queue.pop_front();
+            match frame {
+                None => return Ok(()),
+                Some(frame) => self.write_frame(&frame).await?,
+            }
+        }
+    }
+
+    async fn write_frame(&mut self, frame: &AmqpFrame) -> Result<(), AmqpConnectionError> {
+        let data = FrameWriter::write_frame(frame);
+        let result = async_write(&self.fd, data, None).await;
+
+        match result {
+            Ok(_) => (),
+            Err((error, _)) => return Err(AmqpConnectionError::WriteError(error)),
+        }
+
+        Ok(())
+    }
+}
+
+pub struct AmqpConnectionInternal {
+    fd: Rc<Socket>,
+    channels: RefCell<IndexedList<Rc<AmqpChannelInternals>>>,
+    writer_queue: AsyncChannelTx<AmqpFrame>,
+    read_handler: Cell<TaskHandle<()>>,
+    write_handler: Cell<TaskHandle<()>>,
+}
+
+impl AmqpConnectionInternal {
+    fn new() -> Self {
+        let (_, tx) = async_channel_create();
+        AmqpConnectionInternal {
+            fd: Rc::new(Socket::new(SocketDomain::Inet, SocketType::Stream, SocketFlags::new().close_on_exec(true).flags())),
+            channels: RefCell::new(IndexedList::default()),
+            writer_queue: tx,
+            read_handler: Cell::new(TaskHandle::default()),
+            write_handler: Cell::new(TaskHandle::default()),
+        }
+    }
+
+    fn set_channel(&self, channel: &AmqpChannel) -> usize {
+        self.channels.borrow_mut().insert(channel.ptr.clone())
+    }
+
+    fn clear_channel(&self, index: usize) {
+        self.channels.borrow_mut().remove(index);
+    }
+
+    fn handle_frame(&self, frame: &AmqpFrame) {
+        let index = (frame.channel - 1) as usize;
+        let mut channels = self.channels.borrow_mut();
+
+        let channel = channels.get_mut(index);
+        match channel {
+            None => (),
+            Some(channel) => {
+                channel.handle_frame(frame);
+            },
+        }
+    }
+
+    async fn connect(&self, address: &str, username: &str, password: &str, self_ptr: Rc<AmqpConnectionInternal>) -> Result<(), AmqpConnectionError> {
+        let address = resolve_address(address, Some(5672)).await?;
+        let connected = async_connect(&self.fd, address).await;
+        match connected {
+            Ok(_) => (),
+            Err(error) => return Err(AmqpConnectionError::ConnectError(error)),
+        };
+
+        let written = async_write(&self.fd, AmqpProtocolHeader::new().into(), None).await;
+        match written {
+            Ok(_) => (),
+            Err((error, _)) => return Err(AmqpConnectionError::WriteError(error)),
+        }
+
+        let mut reader = AmqpConnectionReader::new(self.fd.clone());
+        let mut writer = AmqpConnectionWriter::new(self.fd.clone());
+
+        let frame = reader.read_frame().await?;
+        dbg!(frame);
+
+        let mut sasl = String::new();
+        sasl.push('\x00');
+        sasl.push_str(username);
+        sasl.push('\x00');
+        sasl.push_str(password);
+
+        let response = AmqpFrame {
+            channel: 0,
+            payload: AmqpFramePayload::Method(AmqpMethod::ConnectionStartOk(HashMap::new(), "PLAIN".to_string(), sasl, String::new())),
+        };
+
+        writer.enqueue_frame(response);
+        writer.flush_all().await?;
+
+        let frame = reader.read_frame().await?;
+        dbg!(frame);
+
+        let response = AmqpFrame {
+            channel: 0,
+            payload: AmqpFramePayload::Method(AmqpMethod::ConnectionTuneOk(100, 4096, 0)),
+        };
+
+        writer.enqueue_frame(response);
+        writer.flush_all().await?;
+
+        let response = AmqpFrame {
+            channel: 0,
+            payload: AmqpFramePayload::Method(AmqpMethod::ConnectionOpen("/".to_string())),
+        };
+
+        writer.enqueue_frame(response);
+        writer.flush_all().await?;
+
+        let frame = reader.read_frame().await?;
+        dbg!(frame);
+
+        self.start_io_handler(writer, self.writer_queue.rx(), reader, self_ptr);
+
+        // let response = AmqpFrame {
+        //     channel: 0,
+        //     payload: AmqpFramePayload::Method(AmqpMethod::ConnectionClose(0, "shutdown".to_string(), 0, 0)),
+        // };
+
+        // writer.enqueue_frame(response);
+        // writer.flush_all().await?;
+
+        // let frame = reader.read_frame().await?;
+        // dbg!(frame);
+
+        Ok(())
+    }
+
+    fn start_io_handler(&self, mut writer: AmqpConnectionWriter, mut writer_channel: AsyncChannelRx<AmqpFrame>, mut reader: AmqpConnectionReader, connection: Rc<AmqpConnectionInternal>) {
+        self.read_handler.set(async_spawn(async move {
+            let frame = reader.read_frame().await;
+            match frame {
+                Ok(frame) => {
+                    dbg!(&frame);
+                    if frame.channel > 0 {
+                        connection.handle_frame(&frame);
+                    }
+                },
+                Err(_) => panic!("TODO - fixme"),
+            }
+        }));
+
+        self.write_handler.set(async_spawn(async move {
+            loop {
+                let frame = writer_channel.receive().await;
+
+                // TODO: enqueue more frames at once before sending
+                writer.enqueue_frame(frame);
+                let result = writer.flush_all().await;
+
+                // TODO: handle errors
+                assert!(result.is_ok());
+            }
+        }));
     }
 
     async fn write_frame(&mut self, frame: &AmqpFrame) -> Result<(), AmqpConnectionError> {
@@ -232,6 +426,9 @@ mod tests {
         async_run(async {
             let mut amqp = AmqpConnection::new("localhost".to_string());
             let _ = amqp.connect("guest", "guest").await;
+
+            let channel = amqp.open_channel().await;
+            println!("Got channel opened!");
         });
     }
 }
