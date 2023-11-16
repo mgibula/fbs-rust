@@ -81,6 +81,12 @@ impl<T> AsyncChannelTx<T> {
     pub fn send(&self, value : T) {
         self.backend.send(value)
     }
+
+    pub fn rx(&self) -> AsyncChannelRx<T> {
+        AsyncChannelRx {
+            backend: self.backend.clone()
+        }
+    }
 }
 
 impl<T> AsyncChannelBackend<T> {
