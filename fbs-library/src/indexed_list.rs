@@ -1,4 +1,4 @@
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct IndexedList<T> {
     entries: Vec<Option<T>>,
     free_entries: Vec<usize>,
@@ -91,5 +91,11 @@ impl<T: Clone> IndexedList<T> {
         }
 
         self.entries[index].clone()
+    }
+}
+
+impl<T> Default for IndexedList<T> {
+    fn default() -> Self {
+        Self { entries: Vec::new(), free_entries: Vec::new() }
     }
 }
