@@ -405,6 +405,10 @@ impl AmqpConnectionInternal {
                     Err(_) => {
                         eprintln!("Connection closed unexpectedly");
                         connection.mark_connection_closed();
+
+                        // It is possible that we're waiting for connection.close-ok, so signaling
+                        // is needed to avoid deadlock
+                        connection.signal.signal();
                         break;
                     },
                 }
