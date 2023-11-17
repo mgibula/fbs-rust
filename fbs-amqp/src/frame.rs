@@ -90,7 +90,7 @@ pub enum AmqpData {
     FieldTable(HashMap<String, AmqpData>),
 }
 
-#[derive(Error, Debug)]
+#[derive(Error, Debug, Clone)]
 pub enum AmqpFrameError {
     #[error("Buffer too short")]
     BufferTooShort,

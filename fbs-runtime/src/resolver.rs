@@ -24,7 +24,7 @@ fn gai_code_to_error(code: libc::c_int) -> String {
     unsafe { CStr::from_ptr(gai_strerror(code)).to_string_lossy().into_owned() }
 }
 
-#[derive(Error, Debug)]
+#[derive(Error, Debug, Clone)]
 pub enum ResolverError {
     #[error("The name server returned a temporary failure indication.  Try again later")]
     TemporaryError,
@@ -244,7 +244,7 @@ unsafe extern "C" fn sigev_notifier(ptr: sigval) {
     std::mem::forget(inner_ptr);
 }
 
-#[derive(Error, Debug)]
+#[derive(Error, Debug, Clone)]
 pub enum ResolveAddressError {
     #[error("Port format invalid")]
     PortInvalid(#[from] ParseIntError),
