@@ -62,7 +62,7 @@ impl<T> Future for AsyncChannelValue<T> {
 }
 
 impl<T> AsyncChannelRx<T> {
-    pub fn receive(&mut self) -> AsyncChannelValue<T> {
+    pub fn receive(&self) -> AsyncChannelValue<T> {
         AsyncChannelValue { channel: self.backend.clone() }
     }
 
