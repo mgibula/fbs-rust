@@ -51,6 +51,31 @@ impl AmqpChannel {
     fn new(connection: Rc<AmqpConnectionInternal>) -> Self {
         Self { ptr: Rc::new(AmqpChannelInternals::new(connection)) }
     }
+
+    pub async fn close(self) -> Result<(), AmqpConnectionError> {
+        let receiver = AsyncSignal::new();
+        let sender = receiver.clone();
+
+        self.ptr.add_callback(Box::new(move |frame| {
+            match frame.payload {
+                AmqpFramePayload::Method(AmqpMethod::ChannelCloseOk()) => {
+                    sender.signal();
+                    true
+                },
+                _ => false,
+            }
+        }));
+
+        let frame = AmqpFrame {
+            channel: self.ptr.number.get() as u16,
+            payload: AmqpFramePayload::Method(AmqpMethod::ChannelClose(0, "".to_string(), 0, 0)),
+        };
+
+        self.ptr.connection.writer_queue.send(frame);
+        receiver.wait().await;
+
+        Ok(())
+    }
 }
 
 struct AmqpChannelInternals {
@@ -98,7 +123,7 @@ impl AmqpConnection {
         result
     }
 
-    pub async fn open_channel(&mut self) -> Result<AmqpChannel, AmqpConnectionError> {
+    pub async fn channel_open(&mut self) -> Result<AmqpChannel, AmqpConnectionError> {
         let channel = AmqpChannel::new(self.ptr.clone());
         let index = self.ptr.set_channel(&channel);
         channel.ptr.number.set(index);
@@ -117,7 +142,7 @@ impl AmqpConnection {
         }));
 
         let frame = AmqpFrame {
-            channel: (index + 1) as u16,
+            channel: index as u16,
             payload: AmqpFramePayload::Method(AmqpMethod::ChannelOpen()),
         };
 
@@ -125,6 +150,15 @@ impl AmqpConnection {
 
         receiver.wait().await;
         Ok(channel)
+    }
+
+    pub async fn close(self) {
+        let frame = AmqpFrame {
+            channel: 0,
+            payload: AmqpFramePayload::Method(AmqpMethod::ConnectionClose(0, "shutdown".to_string(), 0, 0)),
+        };
+
+
     }
 }
 
@@ -274,14 +308,14 @@ impl AmqpConnectionInternal {
     }
 
     fn set_channel(&self, channel: &AmqpChannel) -> usize {
-        self.channels.borrow_mut().insert(channel.ptr.clone())
+        self.channels.borrow_mut().insert(channel.ptr.clone()) + 1
     }
 
     fn clear_channel(&self, index: usize) {
-        self.channels.borrow_mut().remove(index);
+        self.channels.borrow_mut().remove(index + 1);
     }
 
-    fn handle_frame(&self, frame: &AmqpFrame) {
+    fn handle_channel_frame(&self, frame: &AmqpFrame) {
         let index = (frame.channel - 1) as usize;
         let mut channels = self.channels.borrow_mut();
 
@@ -292,6 +326,10 @@ impl AmqpConnectionInternal {
                 channel.handle_frame(frame);
             },
         }
+    }
+
+    fn handle_connection_frame(&self, frame: &AmqpFrame) {
+
     }
 
     async fn connect(&self, address: &str, username: &str, password: &str, self_ptr: Rc<AmqpConnectionInternal>) -> Result<(), AmqpConnectionError> {
@@ -312,7 +350,6 @@ impl AmqpConnectionInternal {
         let mut writer = AmqpConnectionWriter::new(self.fd.clone());
 
         let frame = reader.read_frame().await?;
-        dbg!(frame);
 
         let mut sasl = String::new();
         sasl.push('\x00');
@@ -329,7 +366,6 @@ impl AmqpConnectionInternal {
         writer.flush_all().await?;
 
         let frame = reader.read_frame().await?;
-        dbg!(frame);
 
         let response = AmqpFrame {
             channel: 0,
@@ -348,45 +384,38 @@ impl AmqpConnectionInternal {
         writer.flush_all().await?;
 
         let frame = reader.read_frame().await?;
-        dbg!(frame);
 
         self.start_io_handler(writer, self.writer_queue.rx(), reader, self_ptr);
-
-        // let response = AmqpFrame {
-        //     channel: 0,
-        //     payload: AmqpFramePayload::Method(AmqpMethod::ConnectionClose(0, "shutdown".to_string(), 0, 0)),
-        // };
-
-        // writer.enqueue_frame(response);
-        // writer.flush_all().await?;
-
-        // let frame = reader.read_frame().await?;
-        // dbg!(frame);
-
         Ok(())
     }
 
     fn start_io_handler(&self, mut writer: AmqpConnectionWriter, mut writer_channel: AsyncChannelRx<AmqpFrame>, mut reader: AmqpConnectionReader, connection: Rc<AmqpConnectionInternal>) {
         self.read_handler.set(async_spawn(async move {
-            let frame = reader.read_frame().await;
-            match frame {
-                Ok(frame) => {
-                    dbg!(&frame);
-                    if frame.channel > 0 {
-                        connection.handle_frame(&frame);
-                    }
-                },
-                Err(_) => panic!("TODO - fixme"),
+            loop {
+                let frame = reader.read_frame().await;
+                match frame {
+                    Ok(frame) => {
+                        dbg!(&frame);
+                        if frame.channel > 0 {
+                            connection.handle_channel_frame(&frame);
+                        } else {
+                            connection.handle_connection_frame(&frame);
+                        }
+                    },
+                    Err(_) => panic!("TODO - fixme"),
+                }
             }
         }));
 
         self.write_handler.set(async_spawn(async move {
             loop {
                 let frame = writer_channel.receive().await;
-
+                dbg!(&frame);
                 // TODO: enqueue more frames at once before sending
                 writer.enqueue_frame(frame);
                 let result = writer.flush_all().await;
+
+                dbg!(&result);
 
                 // TODO: handle errors
                 assert!(result.is_ok());
@@ -427,8 +456,12 @@ mod tests {
             let mut amqp = AmqpConnection::new("localhost".to_string());
             let _ = amqp.connect("guest", "guest").await;
 
-            let channel = amqp.open_channel().await;
+            let channel = amqp.channel_open().await.unwrap();
             println!("Got channel opened!");
+
+            let a = channel.close().await;
+            dbg!(a);
+            println!("Got channel closed!");
         });
     }
 }

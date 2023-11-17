@@ -57,6 +57,17 @@ impl<'buffer> AmqpFrameReader<'buffer> {
                 let _ = self.read_long_string()?;   // deprecated arg
                 Ok(AmqpMethod::ChannelOpenOk())
             },
+            (AMQP_CLASS_CHANNEL, AMQP_METHOD_CHANNEL_CLOSE) => {
+                let reply_code = self.read_u16()?;
+                let reply_text = self.read_short_string()?;
+                let class_id = self.read_u16()?;
+                let method_id = self.read_u16()?;
+
+                Ok(AmqpMethod::ChannelClose(reply_code, reply_text, class_id, method_id))
+            },
+            (AMQP_CLASS_CHANNEL, AMQP_METHOD_CHANNEL_CLOSE_OK) => {
+                Ok(AmqpMethod::ChannelCloseOk())
+            },
             (_, _) => Err(AmqpFrameError::InvalidClassMethod(class_id, method_id))
         }
     }

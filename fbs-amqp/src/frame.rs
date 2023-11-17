@@ -42,6 +42,8 @@ pub enum AmqpMethod {
     ConnectionCloseOk(),
     ChannelOpen(),
     ChannelOpenOk(),
+    ChannelClose(u16, String, u16, u16),                                    // reply-code, reply-text, class-id, method-id
+    ChannelCloseOk(),
     // Channel(ChannelMethod),
     // Exchange(ExchangeMethod),
     // Queue(QueueMethod),
