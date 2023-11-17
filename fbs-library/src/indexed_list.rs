@@ -1,4 +1,4 @@
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct IndexedList<T> {
     entries: Vec<Option<T>>,
     free_entries: Vec<usize>,
@@ -82,6 +82,10 @@ impl<T> IndexedList<T> {
     pub fn size(&self) -> usize {
         self.entries.len() - self.free_entries.len()
     }
+
+    pub fn iter(&self) -> IndexedListIterator<T> {
+        IndexedListIterator(0, self)
+    }
 }
 
 impl<T: Clone> IndexedList<T> {
@@ -97,5 +101,21 @@ impl<T: Clone> IndexedList<T> {
 impl<T> Default for IndexedList<T> {
     fn default() -> Self {
         Self { entries: Vec::new(), free_entries: Vec::new() }
+    }
+}
+
+pub struct IndexedListIterator<'list, T>(usize, &'list IndexedList<T>);
+
+impl<'list, T> Iterator for IndexedListIterator<'list, T> {
+    type Item = Option<&'list T>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.1.get(self.0) {
+            None => None,
+            Some(value) => {
+                self.0 += 1;
+                Some(Some(value))
+            },
+        }
     }
 }
