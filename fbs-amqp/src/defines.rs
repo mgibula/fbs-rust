@@ -34,7 +34,7 @@ pub const AMQP_CLASS_QUEUE: u16                 = 50;
 pub const AMQP_CLASS_BASIC: u16                 = 60;
 pub const AMQP_CLASS_TX: u16                    = 90;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 #[repr(u16)]
 enum AmqpConnectionMethodId {
     Start           = 10,
@@ -60,7 +60,7 @@ pub const AMQP_METHOD_CONNECTION_OPEN_OK: u16   = 41;
 pub const AMQP_METHOD_CONNECTION_CLOSE: u16     = 50;
 pub const AMQP_METHOD_CONNECTION_CLOSE_OK: u16  = 51;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 enum AmqpChannelMethodId {
     Open            = 10,
     OpenOk          = 11,
@@ -77,7 +77,7 @@ pub const AMQP_METHOD_CHANNEL_FLOW_OK: u16      = 21;
 pub const AMQP_METHOD_CHANNEL_CLOSE: u16        = 40;
 pub const AMQP_METHOD_CHANNEL_CLOSE_OK: u16     = 41;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 enum AmqpExchangeMethodId {
     Declare         = 10,
     DeclareOk       = 11,
@@ -85,7 +85,12 @@ enum AmqpExchangeMethodId {
     DeleteOk        = 21,
 }
 
-#[derive(Debug, Clone)]
+pub const AMQP_METHOD_EXCHANGE_DECLARE: u16     = 10;
+pub const AMQP_METHOD_EXCHANGE_DECLARE_OK: u16  = 11;
+pub const AMQP_METHOD_EXCHANGE_DELETE: u16      = 20;
+pub const AMQP_METHOD_EXCHANGE_DELETE_OK: u16   = 21;
+
+#[derive(Debug, Clone, Copy)]
 enum AmqpQueueMethodId {
     Declare         = 10,
     DeclareOk       = 11,
@@ -99,7 +104,7 @@ enum AmqpQueueMethodId {
     DeleteOk        = 41,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 enum AmqpBasicMethodId {
     Qos             = 10,
     QosOk           = 11,
@@ -120,7 +125,7 @@ enum AmqpBasicMethodId {
     RecoverOk       = 111,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 enum AmqpTxMethodId {
     Select          = 10,
     SelectOk        = 11,
@@ -131,7 +136,7 @@ enum AmqpTxMethodId {
 }
 
 #[repr(u8)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 enum AmqpDataType {
     Bool            = 't' as u8,
     I8              = 'b' as u8,

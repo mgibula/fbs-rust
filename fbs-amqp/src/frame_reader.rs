@@ -76,6 +76,12 @@ impl<'buffer> AmqpFrameReader<'buffer> {
                 let active = self.read_u8()?;
                 Ok(AmqpMethod::ChannelFlowOk(active > 0))
             },
+            (AMQP_CLASS_EXCHANGE, AMQP_METHOD_EXCHANGE_DECLARE_OK) => {
+                Ok(AmqpMethod::ExchangeDeclareOk())
+            },
+            (AMQP_CLASS_EXCHANGE, AMQP_METHOD_EXCHANGE_DELETE_OK) => {
+                Ok(AmqpMethod::ExchangeDeleteOk())
+            },
             (_, _) => Err(AmqpFrameError::InvalidClassMethod(class_id, method_id))
         }
     }

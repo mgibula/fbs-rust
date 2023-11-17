@@ -87,6 +87,38 @@ impl AmqpChannel {
 
         Ok(())
     }
+
+    pub async fn declare_exchange(&mut self, name: String, exchange_type: String) -> Result<(), AmqpConnectionError> {
+        self.ptr.connection.is_connection_valid()?;
+
+        let frame = AmqpFrame {
+            channel: self.ptr.number.get() as u16,
+            payload: AmqpFramePayload::Method(AmqpMethod::ExchangeDeclare(name, exchange_type, false, true, false, HashMap::new())),
+        };
+
+        self.ptr.connection.writer_queue.send(Some(frame));
+
+        self.ptr.wait_list.exchange_declare_ok.set(true);
+        self.ptr.rx.receive().await?;
+
+        Ok(())
+    }
+
+    pub async fn delete_exchange(&mut self, name: String, if_unused: bool) -> Result<(), AmqpConnectionError> {
+        self.ptr.connection.is_connection_valid()?;
+
+        let frame = AmqpFrame {
+            channel: self.ptr.number.get() as u16,
+            payload: AmqpFramePayload::Method(AmqpMethod::ExchangeDelete(name, if_unused, false)),
+        };
+
+        self.ptr.connection.writer_queue.send(Some(frame));
+
+        self.ptr.wait_list.exchange_delete_ok.set(true);
+        self.ptr.rx.receive().await?;
+
+        Ok(())
+    }
 }
 
 struct AmqpChannelInternals {
@@ -103,6 +135,8 @@ struct FrameWaiter {
     pub channel_open_ok: Cell<bool>,
     pub channel_close_ok: Cell<bool>,
     pub channel_flow_ok: Cell<bool>,
+    pub exchange_declare_ok: Cell<bool>,
+    pub exchange_delete_ok: Cell<bool>,
 }
 
 impl AmqpChannelInternals {
@@ -142,6 +176,14 @@ impl AmqpChannelInternals {
                 self.wait_list.channel_flow_ok.set(false);
                 self.tx.send(Ok(frame));
             },
+            AmqpFramePayload::Method(AmqpMethod::ExchangeDeclareOk()) if self.wait_list.exchange_declare_ok.get() => {
+                self.wait_list.exchange_declare_ok.set(false);
+                self.tx.send(Ok(frame));
+            },
+            AmqpFramePayload::Method(AmqpMethod::ExchangeDeleteOk()) if self.wait_list.exchange_delete_ok.get() => {
+                self.wait_list.exchange_delete_ok.set(false);
+                self.tx.send(Ok(frame));
+            },
             _ => (),
         }
     }
@@ -159,6 +201,8 @@ impl AmqpConnection {
     }
 
     pub async fn channel_open(&mut self) -> Result<AmqpChannel, AmqpConnectionError> {
+        self.ptr.is_connection_valid()?;
+
         let channel = AmqpChannel::new(self.ptr.clone());
         let index = self.ptr.set_channel(&channel);
         channel.ptr.number.set(index);
@@ -557,9 +601,15 @@ mod tests {
             let mut channel = amqp.channel_open().await.unwrap();
             println!("Got channel opened!");
 
-            let flow = channel.flow(false).await;
+            let flow = channel.flow(true).await;
             println!("After flow!");
             dbg!(flow);
+
+            let r = channel.declare_exchange("test-exchange".to_string(), "direct".to_string()).await;
+            println!("After declare exchange!");
+
+            let r = channel.delete_exchange("test-exchange".to_string(), true).await;
+            println!("After delete exchange!");
 
             let r2 = channel.close().await;
             dbg!(r2);
