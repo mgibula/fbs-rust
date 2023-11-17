@@ -65,6 +65,20 @@ impl AmqpChannel {
 
         Ok(())
     }
+
+    pub async fn flow(&self, active: bool) -> Result<(), AmqpConnectionError> {
+        let frame = AmqpFrame {
+            channel: self.ptr.number.get() as u16,
+            payload: AmqpFramePayload::Method(AmqpMethod::ChannelFlow(active)),
+        };
+
+        self.ptr.connection.writer_queue.send(Some(frame));
+
+        self.ptr.wait_list.channel_flow_ok.set(true);
+        self.ptr.signal.wait().await;
+
+        Ok(())
+    }
 }
 
 struct AmqpChannelInternals {
@@ -72,17 +86,25 @@ struct AmqpChannelInternals {
     signal: AsyncSignal,
     wait_list: FrameWaiter,
     number: Cell<usize>,
+    active: Cell<bool>,
 }
 
 #[derive(Debug, Default)]
 struct FrameWaiter {
     pub channel_open_ok: Cell<bool>,
     pub channel_close_ok: Cell<bool>,
+    pub channel_flow_ok: Cell<bool>,
 }
 
 impl AmqpChannelInternals {
     fn new(connection: Rc<AmqpConnectionInternal>) -> Self {
-        Self { connection, signal: AsyncSignal::new(), wait_list: FrameWaiter::default(), number: Cell::new(0) }
+        Self {
+            connection,
+            signal: AsyncSignal::new(),
+            wait_list: FrameWaiter::default(),
+            number: Cell::new(0),
+            active: Cell::new(true),
+        }
     }
 
     fn handle_frame(&self, frame: AmqpFrame) {
@@ -93,6 +115,20 @@ impl AmqpChannelInternals {
             },
             AmqpFramePayload::Method(AmqpMethod::ChannelOpenOk()) if self.wait_list.channel_open_ok.get() => {
                 self.wait_list.channel_open_ok.set(false);
+                self.signal.signal();
+            },
+            AmqpFramePayload::Method(AmqpMethod::ChannelFlow(active)) => {
+                self.active.set(active);
+
+                let frame = AmqpFrame {
+                    channel: self.number.get() as u16,
+                    payload: AmqpFramePayload::Method(AmqpMethod::ChannelFlowOk(active)),
+                };
+
+                self.connection.writer_queue.send(Some(frame));
+            },
+            AmqpFramePayload::Method(AmqpMethod::ChannelFlowOk(_)) if self.wait_list.channel_flow_ok.get() => {
+                self.wait_list.channel_flow_ok.set(false);
                 self.signal.signal();
             },
             _ => (),
@@ -483,6 +519,8 @@ mod tests {
 
             let channel = amqp.channel_open().await.unwrap();
             println!("Got channel opened!");
+
+            channel.flow(true).await;
 
             channel.close().await;
             println!("Got channel closed!");
