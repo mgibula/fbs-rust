@@ -156,6 +156,11 @@ impl AmqpConnectionReader {
         Self { fd, read_buffer: Vec::with_capacity(4096), read_offset: 0 }
     }
 
+    fn change_capacity(&mut self, size: usize) {
+        assert!(self.read_buffer.capacity() <= size);
+        self.read_buffer.reserve(size - self.read_buffer.capacity());
+    }
+
     async fn fill_buffer(&mut self) -> Result<usize, AmqpConnectionError> {
         if self.read_offset < self.read_buffer.len() {
             return Ok(self.read_buffer.len() - self.read_offset);
@@ -278,6 +283,9 @@ pub struct AmqpConnectionInternal {
     write_handler: Cell<TaskHandle<()>>,
     connection_closed: Cell<bool>,
     signal: AsyncSignal,
+    max_channels: Cell<u16>,
+    max_frame_size: Cell<u32>,
+    heartbeat: Cell<u16>,
 }
 
 impl AmqpConnectionInternal {
@@ -291,6 +299,9 @@ impl AmqpConnectionInternal {
             write_handler: Cell::new(TaskHandle::default()),
             connection_closed: Cell::new(false),
             signal: AsyncSignal::new(),
+            max_channels: Cell::new(100),
+            max_frame_size: Cell::new(4096),
+            heartbeat: Cell::new(0),
         }
     }
 
@@ -365,10 +376,19 @@ impl AmqpConnectionInternal {
         writer.flush_all().await?;
 
         let frame = reader.read_frame().await?;
+        match &frame.payload {
+            AmqpFramePayload::Method(AmqpMethod::ConnectionTune(channels, frame, heartbeat)) => {
+                reader.change_capacity((*frame) as usize);
+                self.max_channels.set(*channels);
+                self.heartbeat.set(*heartbeat);
+            },
+            _ => (),
+        }
 
+        dbg!(&frame);
         let response = AmqpFrame {
             channel: 0,
-            payload: AmqpFramePayload::Method(AmqpMethod::ConnectionTuneOk(100, 4096, 0)),
+            payload: AmqpFramePayload::Method(AmqpMethod::ConnectionTuneOk(self.max_channels.get(), self.max_frame_size.get(), self.heartbeat.get())),
         };
 
         writer.enqueue_frame(response);
@@ -438,18 +458,6 @@ impl AmqpConnectionInternal {
                 }
             }
         }));
-    }
-
-    async fn write_frame(&mut self, frame: &AmqpFrame) -> Result<(), AmqpConnectionError> {
-        let data = FrameWriter::write_frame(frame);
-        let result = async_write(&self.fd, data, None).await;
-
-        match result {
-            Ok(_) => (),
-            Err((error, _)) => return Err(AmqpConnectionError::WriteError(error)),
-        }
-
-        Ok(())
     }
 }
 
