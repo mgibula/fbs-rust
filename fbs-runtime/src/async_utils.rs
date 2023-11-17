@@ -169,7 +169,10 @@ impl Future for AsyncSignal {
     type Output = ();
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         match self.ptr.fired.get() {
-            true => Poll::Ready(()),
+            true => {
+                self.ptr.fired.set(false);
+                Poll::Ready(())
+            },
             false => {
                 let mut waiters = self.ptr.waiters.take();
                 waiters.push(cx.waker().clone());

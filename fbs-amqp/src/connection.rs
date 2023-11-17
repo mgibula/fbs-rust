@@ -53,26 +53,15 @@ impl AmqpChannel {
     }
 
     pub async fn close(self) -> Result<(), AmqpConnectionError> {
-        let receiver = AsyncSignal::new();
-        let sender = receiver.clone();
-
-        self.ptr.add_callback(Box::new(move |frame| {
-            match frame.payload {
-                AmqpFramePayload::Method(AmqpMethod::ChannelCloseOk()) => {
-                    sender.signal();
-                    true
-                },
-                _ => false,
-            }
-        }));
-
         let frame = AmqpFrame {
             channel: self.ptr.number.get() as u16,
             payload: AmqpFramePayload::Method(AmqpMethod::ChannelClose(0, "".to_string(), 0, 0)),
         };
 
-        self.ptr.connection.writer_queue.send(frame);
-        receiver.wait().await;
+        self.ptr.connection.writer_queue.send(Some(frame));
+
+        self.ptr.wait_list.channel_close_ok.set(true);
+        self.ptr.signal.wait().await;
 
         Ok(())
     }
@@ -80,34 +69,33 @@ impl AmqpChannel {
 
 struct AmqpChannelInternals {
     connection: Rc<AmqpConnectionInternal>,
-    callbacks: RefCell<VecDeque<Box<dyn Fn(&AmqpFrame) -> bool>>>,
+    signal: AsyncSignal,
+    wait_list: FrameWaiter,
     number: Cell<usize>,
+}
+
+#[derive(Debug, Default)]
+struct FrameWaiter {
+    pub channel_open_ok: Cell<bool>,
+    pub channel_close_ok: Cell<bool>,
 }
 
 impl AmqpChannelInternals {
     fn new(connection: Rc<AmqpConnectionInternal>) -> Self {
-        Self { connection, callbacks: RefCell::new(VecDeque::new()), number: Cell::new(0) }
+        Self { connection, signal: AsyncSignal::new(), wait_list: FrameWaiter::default(), number: Cell::new(0) }
     }
 
-    fn add_callback(&self, callback: Box<dyn Fn(&AmqpFrame) -> bool>) {
-        self.callbacks.borrow_mut().push_back(callback)
-    }
-
-    fn handle_frame(&self, frame: &AmqpFrame) {
-        let mut callbacks = self.callbacks.borrow_mut();
-        let mut index = 0;
-        let mut handled = false;
-        for callback in callbacks.iter_mut() {
-            handled = callback(frame);
-            index += 1;
-
-            if handled {
-                break;
-            }
-        }
-
-        if handled {
-            callbacks.remove(index);
+    fn handle_frame(&self, frame: AmqpFrame) {
+        match frame.payload {
+            AmqpFramePayload::Method(AmqpMethod::ChannelCloseOk()) if self.wait_list.channel_close_ok.get() => {
+                self.wait_list.channel_close_ok.set(false);
+                self.signal.signal();
+            },
+            AmqpFramePayload::Method(AmqpMethod::ChannelOpenOk()) if self.wait_list.channel_open_ok.get() => {
+                self.wait_list.channel_open_ok.set(false);
+                self.signal.signal();
+            },
+            _ => (),
         }
     }
 }
@@ -128,27 +116,15 @@ impl AmqpConnection {
         let index = self.ptr.set_channel(&channel);
         channel.ptr.number.set(index);
 
-        let receiver = AsyncSignal::new();
-        let sender = receiver.clone();
-
-        channel.ptr.add_callback(Box::new(move |frame| {
-            match frame.payload {
-                AmqpFramePayload::Method(AmqpMethod::ChannelOpenOk()) => {
-                    sender.signal();
-                    true
-                },
-                _ => false,
-            }
-        }));
-
         let frame = AmqpFrame {
             channel: index as u16,
             payload: AmqpFramePayload::Method(AmqpMethod::ChannelOpen()),
         };
 
-        self.ptr.writer_queue.send(frame);
+        self.ptr.writer_queue.send(Some(frame));
+        channel.ptr.wait_list.channel_open_ok.set(true);
+        channel.ptr.signal.wait().await;
 
-        receiver.wait().await;
         Ok(channel)
     }
 
@@ -158,7 +134,14 @@ impl AmqpConnection {
             payload: AmqpFramePayload::Method(AmqpMethod::ConnectionClose(0, "shutdown".to_string(), 0, 0)),
         };
 
+        self.ptr.writer_queue.send(Some(frame));
+        self.ptr.signal.wait().await;
+    }
+}
 
+impl Drop for AmqpConnection {
+    fn drop(&mut self) {
+        self.ptr.mark_connection_closed();
     }
 }
 
@@ -290,9 +273,11 @@ impl AmqpConnectionWriter {
 pub struct AmqpConnectionInternal {
     fd: Rc<Socket>,
     channels: RefCell<IndexedList<Rc<AmqpChannelInternals>>>,
-    writer_queue: AsyncChannelTx<AmqpFrame>,
+    writer_queue: AsyncChannelTx<Option<AmqpFrame>>,
     read_handler: Cell<TaskHandle<()>>,
     write_handler: Cell<TaskHandle<()>>,
+    connection_closed: Cell<bool>,
+    signal: AsyncSignal,
 }
 
 impl AmqpConnectionInternal {
@@ -304,6 +289,8 @@ impl AmqpConnectionInternal {
             writer_queue: tx,
             read_handler: Cell::new(TaskHandle::default()),
             write_handler: Cell::new(TaskHandle::default()),
+            connection_closed: Cell::new(false),
+            signal: AsyncSignal::new(),
         }
     }
 
@@ -315,7 +302,7 @@ impl AmqpConnectionInternal {
         self.channels.borrow_mut().remove(index + 1);
     }
 
-    fn handle_channel_frame(&self, frame: &AmqpFrame) {
+    fn handle_channel_frame(&self, frame: AmqpFrame) {
         let index = (frame.channel - 1) as usize;
         let mut channels = self.channels.borrow_mut();
 
@@ -328,8 +315,20 @@ impl AmqpConnectionInternal {
         }
     }
 
-    fn handle_connection_frame(&self, frame: &AmqpFrame) {
+    fn handle_connection_frame(&self, frame: AmqpFrame) {
+        match frame.payload {
+            AmqpFramePayload::Method(AmqpMethod::ConnectionCloseOk()) => {
+                self.mark_connection_closed();
+                self.signal.signal();
+            },
+            _ => (),
+        }
+    }
 
+    fn mark_connection_closed(&self) {
+        self.connection_closed.set(true);
+        self.writer_queue.send(None);
+        let _ = self.fd.shutdown(true, true);
     }
 
     async fn connect(&self, address: &str, username: &str, password: &str, self_ptr: Rc<AmqpConnectionInternal>) -> Result<(), AmqpConnectionError> {
@@ -389,36 +388,50 @@ impl AmqpConnectionInternal {
         Ok(())
     }
 
-    fn start_io_handler(&self, mut writer: AmqpConnectionWriter, mut writer_channel: AsyncChannelRx<AmqpFrame>, mut reader: AmqpConnectionReader, connection: Rc<AmqpConnectionInternal>) {
+    fn start_io_handler(&self, mut writer: AmqpConnectionWriter, mut writer_channel: AsyncChannelRx<Option<AmqpFrame>>, mut reader: AmqpConnectionReader, connection: Rc<AmqpConnectionInternal>) {
+
         self.read_handler.set(async_spawn(async move {
-            loop {
+            while !connection.connection_closed.get() {
                 let frame = reader.read_frame().await;
                 match frame {
                     Ok(frame) => {
                         dbg!(&frame);
                         if frame.channel > 0 {
-                            connection.handle_channel_frame(&frame);
+                            connection.handle_channel_frame(frame);
                         } else {
-                            connection.handle_connection_frame(&frame);
+                            connection.handle_connection_frame(frame);
                         }
                     },
-                    Err(_) => panic!("TODO - fixme"),
+                    Err(_) => {
+                        eprintln!("Connection closed unexpectedly");
+                        connection.mark_connection_closed();
+                        break;
+                    },
                 }
             }
         }));
 
         self.write_handler.set(async_spawn(async move {
             loop {
+                // TODO: enqueue more frames at once before sending
                 let frame = writer_channel.receive().await;
                 dbg!(&frame);
-                // TODO: enqueue more frames at once before sending
-                writer.enqueue_frame(frame);
-                let result = writer.flush_all().await;
 
-                dbg!(&result);
+                match frame {
+                    Some(frame) => {
+                        writer.enqueue_frame(frame);
+                        let result = writer.flush_all().await;
 
-                // TODO: handle errors
-                assert!(result.is_ok());
+                        // on write error shutdown socket, this should cause read_handler to return error
+                        // and mark connection closed
+                        if result.is_err() {
+                            eprintln!("Connection write error");
+                            let _ = writer.fd.shutdown(true, true);
+                            break;
+                        }
+                    },
+                    None => break,
+                }
             }
         }));
     }
@@ -459,9 +472,11 @@ mod tests {
             let channel = amqp.channel_open().await.unwrap();
             println!("Got channel opened!");
 
-            let a = channel.close().await;
-            dbg!(a);
+            channel.close().await;
             println!("Got channel closed!");
+
+            amqp.close().await;
+            println!("Got connection closed!");
         });
     }
 }

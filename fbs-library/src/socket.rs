@@ -76,7 +76,7 @@ impl Socket {
         }
     }
 
-    pub fn listen(&mut self, address: &SocketIpAddress, backlog: i32) -> Result<(), SocketError> {
+    pub fn listen(&self, address: &SocketIpAddress, backlog: i32) -> Result<(), SocketError> {
         let binary = address.to_binary();
         unsafe {
             let error = libc::bind(self.fd.as_raw_fd(), binary.sockaddr_ptr(), binary.length() as u32);
@@ -93,7 +93,7 @@ impl Socket {
         }
     }
 
-    pub fn set_option(&mut self, option: SocketOptions) -> Result<(), SocketError> {
+    pub fn set_option(&self, option: SocketOptions) -> Result<(), SocketError> {
         match option {
             SocketOptions::ReuseAddr(value) => {
                 unsafe {
@@ -104,6 +104,22 @@ impl Socket {
                     }
                 }
             }
+        }
+
+        Ok(())
+    }
+
+    pub fn shutdown(&self, read_end: bool, write_end: bool) -> Result<(), SocketError> {
+        unsafe {
+            let mut how = 0;
+            how = match (read_end, write_end) {
+                (true, false) => libc::SHUT_RD,
+                (false, true) => libc::SHUT_WR,
+                (true, true) => libc::SHUT_RDWR,
+                (_, _) => return Ok(())
+            };
+
+            libc::shutdown(self.as_raw_fd(), how);
         }
 
         Ok(())
