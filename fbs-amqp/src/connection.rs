@@ -11,10 +11,12 @@ use fbs_runtime::{async_connect, async_write, async_read_into, async_spawn};
 use fbs_runtime::resolver::{resolve_address, ResolveAddressError};
 use fbs_executor::TaskHandle;
 
-use super::frame::{AmqpProtocolHeader, AmqpFrame, AmqpFrameError, AmqpFramePayload, AmqpMethod};
+use super::defines::AMQP_CLASS_BASIC;
+
+use super::frame::{AmqpProtocolHeader, AmqpFrame, AmqpFrameError, AmqpFramePayload, AmqpMethod, AmqpBasicProperties};
 use super::frame_reader::AmqpFrameReader;
 use super::frame_writer::FrameWriter;
-use super::{AmqpDeleteExchangeFlags, AmqpExchangeFlags, AmqpQueueFlags, AmqpDeleteQueueFlags, AmqpConsumeFlags};
+use super::{AmqpDeleteExchangeFlags, AmqpExchangeFlags, AmqpQueueFlags, AmqpDeleteQueueFlags, AmqpConsumeFlags, AmqpPublishFlags};
 
 use thiserror::Error;
 
@@ -283,6 +285,35 @@ impl AmqpChannel {
         } else {
             Ok(String::new())
         }
+    }
+
+    pub async fn publish(&mut self, exchange: String, routing_key: String, flags: AmqpPublishFlags, content: &[u8]) -> Result<(), AmqpConnectionError> {
+        self.ptr.is_channel_valid()?;
+
+        let frame = AmqpFrame {
+            channel: self.ptr.number.get() as u16,
+            payload: AmqpFramePayload::Method(AmqpMethod::BasicPublish(exchange, routing_key, flags.into())),
+        };
+
+        self.ptr.connection.writer_queue.send(Some(frame));
+
+        let properties = AmqpBasicProperties::default();
+
+        let frame = AmqpFrame {
+            channel: self.ptr.number.get() as u16,
+            payload: AmqpFramePayload::Header(AMQP_CLASS_BASIC, content.len() as u64, properties),
+        };
+
+        self.ptr.connection.writer_queue.send(Some(frame));
+
+        let frame = AmqpFrame {
+            channel: self.ptr.number.get() as u16,
+            payload: AmqpFramePayload::Content(content.to_vec()),
+        };
+
+        self.ptr.connection.writer_queue.send(Some(frame));
+
+        Ok(())
     }
 }
 
@@ -601,6 +632,8 @@ impl AmqpConnectionWriter {
             Err((error, _)) => return Err(AmqpConnectionError::WriteError(error)),
         }
 
+        dbg!(&frame);
+
         Ok(())
     }
 }
@@ -797,7 +830,6 @@ impl AmqpConnectionInternal {
             loop {
                 // TODO: enqueue more frames at once before sending
                 let frame = writer_channel.receive().await;
-                dbg!(&frame);
 
                 match frame {
                     Some(frame) => {
@@ -821,8 +853,10 @@ impl AmqpConnectionInternal {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
-    use fbs_runtime::async_run;
+    use fbs_runtime::{async_run, async_sleep};
 
     #[test]
     fn bad_connect_test() {
@@ -876,6 +910,42 @@ mod tests {
 
             let _ = channel.delete_exchange("test-exchange".to_string(), AmqpDeleteExchangeFlags::new().if_unused(true)).await;
             println!("After delete exchange!");
+
+            let r2 = channel.close().await;
+            dbg!(r2);
+            println!("Got channel closed!");
+
+            amqp.close().await;
+            println!("Got connection closed!");
+        });
+    }
+
+    #[test]
+    fn publish_test() {
+        async_run(async {
+            let mut amqp = AmqpConnection::new("localhost".to_string());
+            let result = amqp.connect("guest", "guest").await;
+            dbg!(result);
+
+            let mut channel = amqp.channel_open().await.unwrap();
+            println!("Got channel opened!");
+
+            let flow = channel.flow(true).await;
+            println!("After flow!");
+            dbg!(flow);
+
+            let _ = channel.declare_exchange("test-exchange".to_string(), "direct".to_string(), AmqpExchangeFlags::new()).await;
+            println!("After declare exchange!");
+
+            let _ = channel.declare_queue("test-queue".to_string(), AmqpQueueFlags::new().durable(true)).await;
+            println!("After declare queue!");
+
+            let _ = channel.purge_queue("test-queue".to_string(), false).await;
+            println!("After queue purge!");
+
+            let _ = channel.publish("".to_string(), "test-queue".to_string(), AmqpPublishFlags::new(), "test-data".as_bytes()).await;
+
+            async_sleep(Duration::new(2, 0));
 
             let r2 = channel.close().await;
             dbg!(r2);

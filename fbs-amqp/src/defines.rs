@@ -154,6 +154,21 @@ pub const AMQP_METHOD_BASIC_RECOVERY_ASYNC: u16 = 100;
 pub const AMQP_METHOD_BASIC_RECOVER: u16        = 110;
 pub const AMQP_METHOD_BASIC_RECOVER_OK: u16     = 111;
 
+pub const AMQP_BASIC_PROPERTY_CONTENT_TYPE_BIT: u8      = 15;
+pub const AMQP_BASIC_PROPERTY_CONTENT_ENCODING_BIT: u8  = 14;
+pub const AMQP_BASIC_PROPERTY_HEADERS_BIT: u8           = 13;
+pub const AMQP_BASIC_PROPERTY_DELIVERY_MNODE_BIT: u8    = 12;
+pub const AMQP_BASIC_PROPERTY_PRIORITY_BIT: u8          = 11;
+pub const AMQP_BASIC_PROPERTY_CORRELATION_ID_BIT: u8    = 10;
+pub const AMQP_BASIC_PROPERTY_REPLY_TO_BIT: u8          = 9;
+pub const AMQP_BASIC_PROPERTY_EXPIRATION_BIT: u8        = 8;
+pub const AMQP_BASIC_PROPERTY_MESSAGE_ID_BIT: u8        = 7;
+pub const AMQP_BASIC_PROPERTY_TIMESTAMP_BIT: u8         = 6;
+pub const AMQP_BASIC_PROPERTY_TYPE_BIT: u8              = 5;
+pub const AMQP_BASIC_PROPERTY_USER_ID_BIT: u8           = 4;
+pub const AMQP_BASIC_PROPERTY_APP_ID_BIT: u8            = 3;
+pub const AMQP_BASIC_PROPERTY_CLUSTER_ID_BIT: u8        = 2;
+
 #[derive(Debug, Clone, Copy)]
 enum AmqpTxMethodId {
     Select          = 10,

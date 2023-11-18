@@ -279,3 +279,40 @@ impl Into<u8> for AmqpConsumeFlags {
         self.flags
     }
 }
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct AmqpPublishFlags {
+    flags: u8,
+}
+
+impl AmqpPublishFlags {
+    pub fn new() -> Self {
+        Self { flags: 0 }
+    }
+
+    pub fn mandatory(mut self, value: bool) -> Self {
+        if value {
+            self.flags |= 1 << 0;
+        } else {
+            self.flags &= !(1 << 0);
+        }
+
+        self
+    }
+
+    pub fn immediate(mut self, value: bool) -> Self {
+        if value {
+            self.flags |= 1 << 1;
+        } else {
+            self.flags &= !(1 << 1);
+        }
+
+        self
+    }
+}
+
+impl Into<u8> for AmqpPublishFlags {
+    fn into(self) -> u8 {
+        self.flags
+    }
+}

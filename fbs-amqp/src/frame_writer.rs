@@ -1,8 +1,6 @@
 use std::collections::HashMap;
 
-use crate::frame::AmqpData;
-
-use super::frame::{AmqpFrame, AmqpFramePayload, AmqpMethod};
+use super::frame::{AmqpFrame, AmqpFramePayload, AmqpMethod, AmqpData, AmqpBasicProperties};
 use super::defines::*;
 
 pub struct FrameWriter;
@@ -13,6 +11,8 @@ impl FrameWriter {
 
         match &frame.payload {
             AmqpFramePayload::Method(_) => write_u8(&mut result, AMQP_FRAME_TYPE_METHOD),
+            AmqpFramePayload::Header(_, _, _) => write_u8(&mut result, AMQP_FRAME_TYPE_HEADER),
+            AmqpFramePayload::Content(_) => write_u8(&mut result, AMQP_FRAME_TYPE_CONTENT),
             _ => (),
         }
 
@@ -29,8 +29,139 @@ impl FrameWriter {
     fn serialize_frame(frame: &AmqpFrame) -> Vec<u8> {
         match &frame.payload {
             AmqpFramePayload::Method(method) => FrameWriter::serialize_method_frame(method),
+            AmqpFramePayload::Header(class, size, properties) => FrameWriter::serialize_header_frame(*class, *size, properties),
+            AmqpFramePayload::Content(data) => FrameWriter::serialize_content_frame(data),
             _ => panic!("Attempting to write unsupported frame type"),
         }
+    }
+
+    fn serialize_content_frame(data: &[u8]) -> Vec<u8> {
+        data.to_vec()
+    }
+
+    fn serialize_header_frame(class_id: u16, size: u64, properties: &AmqpBasicProperties) -> Vec<u8> {
+        let mut properties_mask: u16 = 0;
+        let mut buffer = Vec::new();
+        match &properties.content_type {
+            None => (),
+            Some(value) => {
+                properties_mask |= 1 << AMQP_BASIC_PROPERTY_CONTENT_TYPE_BIT;
+                write_short_string(&mut buffer, value);
+            }
+        }
+
+        match &properties.content_encoding {
+            None => (),
+            Some(value) => {
+                properties_mask |= 1 << AMQP_BASIC_PROPERTY_CONTENT_ENCODING_BIT;
+                write_short_string(&mut buffer, value);
+            }
+        }
+
+        match &properties.headers {
+            None => (),
+            Some(value) => {
+                properties_mask |= 1 << AMQP_BASIC_PROPERTY_HEADERS_BIT;
+                write_table(&mut buffer, value);
+            }
+        }
+
+        match &properties.delivery_mode {
+            None => (),
+            Some(value) => {
+                properties_mask |= 1 << AMQP_BASIC_PROPERTY_DELIVERY_MNODE_BIT;
+                write_u8(&mut buffer, *value);
+            }
+        }
+
+        match &properties.priority {
+            None => (),
+            Some(value) => {
+                properties_mask |= 1 << AMQP_BASIC_PROPERTY_PRIORITY_BIT;
+                write_u8(&mut buffer, *value);
+            }
+        }
+
+        match &properties.correlation_id {
+            None => (),
+            Some(value) => {
+                properties_mask |= 1 << AMQP_BASIC_PROPERTY_CORRELATION_ID_BIT;
+                write_short_string(&mut buffer, value);
+            }
+        }
+
+        match &properties.reply_to {
+            None => (),
+            Some(value) => {
+                properties_mask |= 1 << AMQP_BASIC_PROPERTY_REPLY_TO_BIT;
+                write_short_string(&mut buffer, value);
+            }
+        }
+
+        match &properties.expiration {
+            None => (),
+            Some(value) => {
+                properties_mask |= 1 << AMQP_BASIC_PROPERTY_EXPIRATION_BIT;
+                write_short_string(&mut buffer, value);
+            }
+        }
+
+        match &properties.message_id {
+            None => (),
+            Some(value) => {
+                properties_mask |= 1 << AMQP_BASIC_PROPERTY_MESSAGE_ID_BIT;
+                write_short_string(&mut buffer, value);
+            }
+        }
+
+        match &properties.timestamp {
+            None => (),
+            Some(value) => {
+                properties_mask |= 1 << AMQP_BASIC_PROPERTY_TIMESTAMP_BIT;
+                write_u64(&mut buffer, *value);
+            }
+        }
+
+        match &properties.message_type {
+            None => (),
+            Some(value) => {
+                properties_mask |= 1 << AMQP_BASIC_PROPERTY_TYPE_BIT;
+                write_short_string(&mut buffer, value);
+            }
+        }
+
+        match &properties.user_id {
+            None => (),
+            Some(value) => {
+                properties_mask |= 1 << AMQP_BASIC_PROPERTY_USER_ID_BIT;
+                write_short_string(&mut buffer, value);
+            }
+        }
+
+        match &properties.app_id {
+            None => (),
+            Some(value) => {
+                properties_mask |= 1 << AMQP_BASIC_PROPERTY_APP_ID_BIT;
+                write_short_string(&mut buffer, value);
+            }
+        }
+
+        match &properties.cluster_id {
+            None => (),
+            Some(value) => {
+                properties_mask |= 1 << AMQP_BASIC_PROPERTY_CLUSTER_ID_BIT;
+                write_short_string(&mut buffer, value);
+            }
+        }
+
+        let mut result = Vec::new();
+        write_u16(&mut result, class_id);
+        write_u16(&mut result, 0);
+        write_u64(&mut result, size);
+        write_u16(&mut result, properties_mask);
+        write_bytes(&mut result, &buffer);
+
+        result
     }
 
     fn serialize_method_frame(method: &AmqpMethod) -> Vec<u8> {
@@ -174,6 +305,14 @@ impl FrameWriter {
                 write_u16(&mut result, AMQP_CLASS_BASIC);
                 write_u16(&mut result, AMQP_METHOD_BASIC_CANCEL);
                 write_short_string(&mut result, tag);
+                write_u8(&mut result, *flags);
+            },
+            AmqpMethod::BasicPublish(exchange, routing_key, flags) => {
+                write_u16(&mut result, AMQP_CLASS_BASIC);
+                write_u16(&mut result, AMQP_METHOD_BASIC_PUBLISH);
+                write_u16(&mut result, 0);      // deprecated
+                write_short_string(&mut result, exchange);
+                write_short_string(&mut result, routing_key);
                 write_u8(&mut result, *flags);
             },
             _ => panic!("Attempting to write unsupported frame type"),

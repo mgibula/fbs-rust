@@ -25,9 +25,44 @@ pub struct AmqpFrame {
 #[derive(Debug, Clone)]
 pub enum AmqpFramePayload {
     Method(AmqpMethod),
-    Header(AmqpHeaderFrame),
-    Content(AmqpContentFrame),
+    Header(u16, u64, AmqpBasicProperties),
+    Content(Vec<u8>),
     Heartbeat(AmqpHeartbeatFrame),
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct AmqpBasicProperties {
+    pub content_type: Option<String>,
+    pub content_encoding: Option<String>,
+    pub headers: Option<HashMap<String, AmqpData>>,
+    pub delivery_mode: Option<u8>,
+    pub priority: Option<u8>,
+    pub correlation_id: Option<String>,
+    pub reply_to: Option<String>,
+    pub expiration: Option<String>,
+    pub message_id: Option<String>,
+    pub timestamp: Option<u64>,
+    pub message_type: Option<String>,
+    pub user_id: Option<String>,
+    pub app_id: Option<String>,
+    pub cluster_id: Option<String>,
+}
+
+pub enum AmqpBasicProperty {
+    ContentType(String),                    // bit 15
+    ContentEncoding(String),                // bit 14
+    Headers(HashMap<String, AmqpData>),     // bit 13
+    DeliveryMode(bool),                     // bit 12
+    Priority(u8),                           // bit 11
+    CorrelationId(String),                  // bit 10
+    ReplyTo(String),                        // bit 9
+    Expiration(String),                     // bit 8
+    MessageId(String),                      // bit 7
+    Timestamp(u64),                         // bit 6
+    Type(String),                           // bit 5
+    UserId(String),                         // bit 4
+    AppId(String),                          // bit 3
+    ClusterId(String),                      // bit 2
 }
 
 #[derive(Debug, Clone)]
@@ -66,16 +101,7 @@ pub enum AmqpMethod {
     BasicConsumeOk(String),                                                         // tag
     BasicCancel(String, u8),                                                        // tag, no-wait
     BasicCancelOk(String),                                                          // tag
-}
-
-#[derive(Debug, Clone)]
-pub struct AmqpHeaderFrame {
-
-}
-
-#[derive(Debug, Clone)]
-pub struct AmqpContentFrame {
-
+    BasicPublish(String, String, u8),                                               // exchange, routing-key, flags
 }
 
 #[derive(Debug, Clone)]
