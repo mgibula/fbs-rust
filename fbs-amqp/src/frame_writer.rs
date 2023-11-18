@@ -56,7 +56,7 @@ impl FrameWriter {
                 write_u16(&mut result, AMQP_METHOD_CONNECTION_OPEN);
                 write_short_string(&mut result, vhost);
                 write_short_string(&mut result, "");    // deprecated but necessary
-                write_u8(&mut result, b'\x00');         // deprecated but necessary
+                write_u8(&mut result, 0);         // deprecated but necessary
             },
             AmqpMethod::ConnectionClose(reply_code, reply_text, class_id, method_id) => {
                 write_u16(&mut result, AMQP_CLASS_CONNECTION);
@@ -143,14 +143,14 @@ impl FrameWriter {
             AmqpMethod::QueuePurge(name, flags) => {
                 write_u16(&mut result, AMQP_CLASS_QUEUE);
                 write_u16(&mut result, AMQP_METHOD_QUEUE_PURGE);
-                write_i16(&mut result, 0);      // deprecated
+                write_u16(&mut result, 0);      // deprecated
                 write_short_string(&mut result, name);
                 write_u8(&mut result, *flags);
             },
             AmqpMethod::QueueDelete(name, flags) => {
                 write_u16(&mut result, AMQP_CLASS_QUEUE);
                 write_u16(&mut result, AMQP_METHOD_QUEUE_DELETE);
-                write_i16(&mut result, 0);      // deprecated
+                write_u16(&mut result, 0);      // deprecated
                 write_short_string(&mut result, name);
                 write_u8(&mut result, *flags);
             },
@@ -160,6 +160,15 @@ impl FrameWriter {
                 write_i32(&mut result, *size);
                 write_i16(&mut result, *count);
                 write_u8(&mut result, (*global) as u8);
+            },
+            AmqpMethod::BasicConsume(queue, tag, flags, arguments) => {
+                write_u16(&mut result, AMQP_CLASS_BASIC);
+                write_u16(&mut result, AMQP_METHOD_BASIC_CONSUME);
+                write_u16(&mut result, 0);      // deprecated
+                write_short_string(&mut result, queue);
+                write_short_string(&mut result, tag);
+                write_u8(&mut result, *flags);
+                write_table(&mut result, arguments);
             },
             _ => panic!("Attempting to write unsupported frame type"),
         }

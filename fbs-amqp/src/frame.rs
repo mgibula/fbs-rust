@@ -62,6 +62,8 @@ pub enum AmqpMethod {
     QueueDeleteOk(i32),                                                             // messages
     BasicQos(i32, i16, bool),                                                       // size, count, global
     BasicQosOk(),
+    BasicConsume(String, String, u8, HashMap<String, AmqpData>),                    // queue, tag, flags, arguments
+    BasicConsumeOk(String),                                                         // tag
 }
 
 #[derive(Debug, Clone)]

@@ -14,7 +14,7 @@ use fbs_executor::TaskHandle;
 use super::frame::{AmqpProtocolHeader, AmqpFrame, AmqpFrameError, AmqpFramePayload, AmqpMethod};
 use super::frame_reader::AmqpFrameReader;
 use super::frame_writer::FrameWriter;
-use super::{AmqpDeleteExchangeFlags, AmqpExchangeFlags, AmqpQueueFlags, AmqpDeleteQueueFlags};
+use super::{AmqpDeleteExchangeFlags, AmqpExchangeFlags, AmqpQueueFlags, AmqpDeleteQueueFlags, AmqpConsumeFlags};
 
 use thiserror::Error;
 
@@ -145,7 +145,7 @@ impl AmqpChannel {
                 _ => Err(AmqpConnectionError::ProtocolError(frame)),
             }
         } else {
-            Ok(("".to_string(), 0, 0))
+            Ok((String::new(), 0, 0))
         }
     }
 
@@ -240,6 +240,28 @@ impl AmqpChannel {
 
         Ok(())
     }
+
+    pub async fn consume(&mut self, queue: String, tag: String, flags: AmqpConsumeFlags) -> Result<String, AmqpConnectionError> {
+        self.ptr.is_channel_valid()?;
+
+        let frame = AmqpFrame {
+            channel: self.ptr.number.get() as u16,
+            payload: AmqpFramePayload::Method(AmqpMethod::BasicConsume(queue, tag, flags.into(), HashMap::new())),
+        };
+
+        self.ptr.connection.writer_queue.send(Some(frame));
+
+        if !flags.has_no_wait() {
+            self.ptr.wait_list.basic_consume_ok.set(true);
+            let frame = self.ptr.rx.receive().await?;
+            match frame.payload {
+                AmqpFramePayload::Method(AmqpMethod::BasicConsumeOk(tag)) => Ok(tag),
+                _ => Err(AmqpConnectionError::ProtocolError(frame)),
+            }
+        } else {
+            Ok(String::new())
+        }
+    }
 }
 
 struct AmqpChannelInternals {
@@ -265,6 +287,7 @@ struct FrameWaiter {
     pub queue_purge_ok: Cell<bool>,
     pub queue_delete_ok: Cell<bool>,
     pub basic_qos_ok: Cell<bool>,
+    pub basic_consume_ok: Cell<bool>,
 }
 
 impl AmqpChannelInternals {
@@ -360,6 +383,11 @@ impl AmqpChannelInternals {
             },
             AmqpFramePayload::Method(AmqpMethod::BasicQosOk()) if self.wait_list.basic_qos_ok.get() => {
                 self.wait_list.basic_qos_ok.set(true);
+                self.tx.send(Ok(frame));
+                Ok(())
+            },
+            AmqpFramePayload::Method(AmqpMethod::BasicConsumeOk(_)) if self.wait_list.basic_consume_ok.get() => {
+                self.wait_list.basic_consume_ok.set(true);
                 self.tx.send(Ok(frame));
                 Ok(())
             },
@@ -804,6 +832,9 @@ mod tests {
             println!("After queue purge!");
 
             let _ = channel.qos(0, 1, false).await;
+            println!("After basic qos!");
+
+            let _ = channel.consume("test-queue".to_string(), String::new(), AmqpConsumeFlags::new()).await;
             println!("After basic qos!");
 
             let _ = channel.unbind_queue("test-queue".to_string(), "test-exchange".to_string(), "test-key".to_string()).await;

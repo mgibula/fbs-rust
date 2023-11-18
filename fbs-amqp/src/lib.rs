@@ -168,7 +168,6 @@ impl Into<u8> for AmqpQueueFlags {
     }
 }
 
-
 #[derive(Debug, Default, Clone, Copy)]
 pub struct AmqpDeleteQueueFlags {
     flags: u8,
@@ -215,6 +214,67 @@ impl AmqpDeleteQueueFlags {
 }
 
 impl Into<u8> for AmqpDeleteQueueFlags {
+    fn into(self) -> u8 {
+        self.flags
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct AmqpConsumeFlags {
+    flags: u8,
+}
+
+impl AmqpConsumeFlags {
+    pub fn new() -> Self {
+        Self { flags: 0 }
+    }
+
+    pub fn no_local(mut self, value: bool) -> Self {
+        if value {
+            self.flags |= 1 << 0;
+        } else {
+            self.flags &= !(1 << 0);
+        }
+
+        self
+    }
+
+    pub fn no_ack(mut self, value: bool) -> Self {
+        if value {
+            self.flags |= 1 << 1;
+        } else {
+            self.flags &= !(1 << 1);
+        }
+
+        self
+    }
+
+    pub fn exclusive(mut self, value: bool) -> Self {
+        if value {
+            self.flags |= 1 << 2;
+        } else {
+            self.flags &= !(1 << 2);
+        }
+
+        self
+    }
+
+    pub fn no_wait(mut self, value: bool) -> Self {
+        if value {
+            self.flags |= 1 << 3;
+        } else {
+            self.flags &= !(1 << 3);
+        }
+
+        self
+    }
+
+    fn has_no_wait(self) -> bool {
+        (self.flags & (1 << 3)) != 0
+    }
+}
+
+impl Into<u8> for AmqpConsumeFlags {
     fn into(self) -> u8 {
         self.flags
     }

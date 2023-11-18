@@ -105,6 +105,10 @@ impl<'buffer> AmqpFrameReader<'buffer> {
             (AMQP_CLASS_BASIC, AMQP_METHOD_BASIC_QOS_OK) => {
                 Ok(AmqpMethod::BasicQosOk())
             },
+            (AMQP_CLASS_BASIC, AMQP_METHOD_BASIC_CONSUME_OK) => {
+                let tag = self.read_short_string()?;
+                Ok(AmqpMethod::BasicConsumeOk(tag))
+            },
             (_, _) => Err(AmqpFrameError::InvalidClassMethod(class_id, method_id))
         }
     }
