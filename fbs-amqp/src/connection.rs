@@ -20,6 +20,8 @@ use super::{AmqpDeleteExchangeFlags, AmqpExchangeFlags, AmqpQueueFlags, AmqpDele
 
 use thiserror::Error;
 
+const FRAME_EXTRA_SIZE: u32 = 8;  // size of frame header and footer
+
 #[derive(Error, Debug, Clone)]
 pub enum AmqpConnectionError {
     #[error("AMQP address incorrect")]
@@ -287,7 +289,7 @@ impl AmqpChannel {
         }
     }
 
-    pub async fn publish(&mut self, exchange: String, routing_key: String, flags: AmqpPublishFlags, content: &[u8]) -> Result<(), AmqpConnectionError> {
+    pub async fn publish(&mut self, exchange: String, routing_key: String, properties: AmqpBasicProperties, flags: AmqpPublishFlags, mut content: &[u8]) -> Result<(), AmqpConnectionError> {
         self.ptr.is_channel_valid()?;
 
         let frame = AmqpFrame {
@@ -297,8 +299,6 @@ impl AmqpChannel {
 
         self.ptr.connection.writer_queue.send(Some(frame));
 
-        let properties = AmqpBasicProperties::default();
-
         let frame = AmqpFrame {
             channel: self.ptr.number.get() as u16,
             payload: AmqpFramePayload::Header(AMQP_CLASS_BASIC, content.len() as u64, properties),
@@ -306,12 +306,19 @@ impl AmqpChannel {
 
         self.ptr.connection.writer_queue.send(Some(frame));
 
-        let frame = AmqpFrame {
-            channel: self.ptr.number.get() as u16,
-            payload: AmqpFramePayload::Content(content.to_vec()),
-        };
+        let mut total_bytes_to_send = content.len();
+        while total_bytes_to_send > 0 {
+            let bytes_in_frame = min(total_bytes_to_send, self.ptr.connection.max_frame_size.get() as usize);
 
-        self.ptr.connection.writer_queue.send(Some(frame));
+            let frame = AmqpFrame {
+                channel: self.ptr.number.get() as u16,
+                payload: AmqpFramePayload::Content(content[..bytes_in_frame].to_vec()),
+            };
+
+            self.ptr.connection.writer_queue.send(Some(frame));
+            content = &content[bytes_in_frame..];
+            total_bytes_to_send -= bytes_in_frame;
+        }
 
         Ok(())
     }
@@ -769,7 +776,16 @@ impl AmqpConnectionInternal {
         let frame = reader.read_frame().await?;
         match &frame.payload {
             AmqpFramePayload::Method(AmqpMethod::ConnectionTune(channels, frame, heartbeat)) => {
-                reader.change_capacity((*frame) as usize);
+                if *frame > 0 {
+                    reader.change_capacity((*frame) as usize);
+
+                    // no real server is going to send value so small, but we want to
+                    // prevent an underflow
+                    if *frame > FRAME_EXTRA_SIZE {
+                        self.max_frame_size.set((*frame) - FRAME_EXTRA_SIZE);
+                    }
+                }
+
                 self.max_channels.set(*channels);
                 self.heartbeat.set(*heartbeat);
             },
@@ -943,7 +959,16 @@ mod tests {
             let _ = channel.purge_queue("test-queue".to_string(), false).await;
             println!("After queue purge!");
 
-            let _ = channel.publish("".to_string(), "test-queue".to_string(), AmqpPublishFlags::new(), "test-data".as_bytes()).await;
+            let mut properties = AmqpBasicProperties::default();
+            properties.content_type = Some("text/plain".to_string());
+            properties.correlation_id = Some("correlation_id test".to_string());
+            properties.app_id = Some("app_id test".to_string());
+            properties.timestamp = Some(234524);
+            properties.cluster_id = Some("cluster_id test".to_string());
+            properties.message_id = Some("message id test".to_string());
+            properties.priority = Some(2);
+
+            let _ = channel.publish("".to_string(), "test-queue".to_string(), properties, AmqpPublishFlags::new(), "test-data".as_bytes()).await;
 
             async_sleep(Duration::new(2, 0));
 
