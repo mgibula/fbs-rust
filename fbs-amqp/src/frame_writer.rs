@@ -113,6 +113,14 @@ impl FrameWriter {
                 write_short_string(&mut result, &name);
                 write_u8(&mut result, *flags);
             },
+            AmqpMethod::QueueDeclare(name, flags, arguments) => {
+                write_u16(&mut result, AMQP_CLASS_QUEUE);
+                write_u16(&mut result, AMQP_METHOD_QUEUE_DECLARE);
+                write_i16(&mut result, 0);
+                write_short_string(&mut result, name);
+                write_u8(&mut result, *flags);
+                write_table(&mut result, arguments);
+            },
             _ => panic!("Attempting to write unsupported frame type"),
         }
 

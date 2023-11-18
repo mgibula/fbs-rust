@@ -46,10 +46,12 @@ pub enum AmqpMethod {
     ChannelCloseOk(),
     ChannelFlow(bool),                                                              // active
     ChannelFlowOk(bool),                                                            // active
-    ExchangeDeclare(String, String, u8, HashMap<String, AmqpData>),   // name, type, paassive, durable, no-wait, arguments
+    ExchangeDeclare(String, String, u8, HashMap<String, AmqpData>),                 // name, type, flags, arguments
     ExchangeDeclareOk(),
-    ExchangeDelete(String, u8),                                             // name, if-unused, no-wait
+    ExchangeDelete(String, u8),                                                     // name, flags
     ExchangeDeleteOk(),
+    QueueDeclare(String, u8, HashMap<String, AmqpData>),                            // name, flags, arguments
+    QueueDeclareOk(String, i32, i32),
     // Channel(ChannelMethod),
     // Exchange(ExchangeMethod),
     // Queue(QueueMethod),

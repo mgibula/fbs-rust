@@ -14,7 +14,7 @@ use fbs_executor::TaskHandle;
 use super::frame::{AmqpProtocolHeader, AmqpFrame, AmqpFrameError, AmqpFramePayload, AmqpMethod};
 use super::frame_reader::AmqpFrameReader;
 use super::frame_writer::FrameWriter;
-use super::{AmqpDeleteExchangeFlags, AmqpExchangeFlags};
+use super::{AmqpDeleteExchangeFlags, AmqpExchangeFlags, AmqpQueueFlags};
 
 use thiserror::Error;
 
@@ -37,7 +37,9 @@ pub enum AmqpConnectionError {
     #[error("Frame error")]
     FrameError(#[from] AmqpFrameError),
     #[error("Connection closed by server")]
-    ConnectionClosedByServer(u16, String, u16, u16)
+    ConnectionClosedByServer(u16, String, u16, u16),
+    #[error("Protocol error")]
+    ProtocolError(AmqpFrame),
 }
 
 pub struct AmqpConnection {
@@ -122,6 +124,28 @@ impl AmqpChannel {
 
         Ok(())
     }
+
+    pub async fn declare_queue(&mut self, name: String, flags: AmqpQueueFlags) -> Result<(String, i32, i32), AmqpConnectionError> {
+        self.ptr.connection.is_connection_valid()?;
+
+        let frame = AmqpFrame {
+            channel: self.ptr.number.get() as u16,
+            payload: AmqpFramePayload::Method(AmqpMethod::QueueDeclare(name, flags.into(), HashMap::new())),
+        };
+
+        self.ptr.connection.writer_queue.send(Some(frame));
+
+        if !flags.has_no_wait() {
+            self.ptr.wait_list.queue_declare_ok.set(true);
+            let frame = self.ptr.rx.receive().await?;
+            match frame.payload {
+                AmqpFramePayload::Method(AmqpMethod::QueueDeclareOk(name, messages, consumers)) => Ok((name, messages, consumers)),
+                _ => Err(AmqpConnectionError::ProtocolError(frame)),
+            }
+        } else {
+            Ok(("".to_string(), 0, 0))
+        }
+    }
 }
 
 struct AmqpChannelInternals {
@@ -140,6 +164,7 @@ struct FrameWaiter {
     pub channel_flow_ok: Cell<bool>,
     pub exchange_declare_ok: Cell<bool>,
     pub exchange_delete_ok: Cell<bool>,
+    pub queue_declare_ok: Cell<bool>,
 }
 
 impl AmqpChannelInternals {
@@ -185,6 +210,10 @@ impl AmqpChannelInternals {
             },
             AmqpFramePayload::Method(AmqpMethod::ExchangeDeleteOk()) if self.wait_list.exchange_delete_ok.get() => {
                 self.wait_list.exchange_delete_ok.set(false);
+                self.tx.send(Ok(frame));
+            },
+            AmqpFramePayload::Method(AmqpMethod::QueueDeclareOk(_, _, _)) if self.wait_list.queue_declare_ok.get() => {
+                self.wait_list.queue_declare_ok.set(false);
                 self.tx.send(Ok(frame));
             },
             _ => (),
@@ -614,6 +643,11 @@ mod tests {
 
             let r = channel.delete_exchange("test-exchange".to_string(), AmqpDeleteExchangeFlags::new().if_unused(true)).await;
             println!("After delete exchange!");
+
+            let r = channel.declare_queue("test-queue".to_string(), AmqpQueueFlags::new().durable(true)).await;
+            println!("After declare queue!");
+
+            dbg!(r);
 
             let r2 = channel.close().await;
             dbg!(r2);

@@ -15,21 +15,21 @@ impl AmqpExchangeFlags {
         Self { flags: 0 }
     }
 
-    pub fn durable(mut self, value: bool) -> Self {
-        if value {
-            self.flags |= 1 << 1;
-        } else {
-            self.flags &= !(1 << 1);
-        }
-
-        self
-    }
-
     pub fn passive(mut self, value: bool) -> Self {
         if value {
             self.flags |= 1 << 0;
         } else {
             self.flags &= !(1 << 0);
+        }
+
+        self
+    }
+
+    pub fn durable(mut self, value: bool) -> Self {
+        if value {
+            self.flags |= 1 << 1;
+        } else {
+            self.flags &= !(1 << 1);
         }
 
         self
@@ -92,6 +92,77 @@ impl AmqpDeleteExchangeFlags {
 }
 
 impl Into<u8> for AmqpDeleteExchangeFlags {
+    fn into(self) -> u8 {
+        self.flags
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct AmqpQueueFlags {
+    flags: u8,
+}
+
+impl AmqpQueueFlags {
+    pub fn new() -> Self {
+        Self { flags: 0 }
+    }
+
+    pub fn passive(mut self, value: bool) -> Self {
+        if value {
+            self.flags |= 1 << 0;
+        } else {
+            self.flags &= !(1 << 0);
+        }
+
+        self
+    }
+
+    pub fn durable(mut self, value: bool) -> Self {
+        if value {
+            self.flags |= 1 << 1;
+        } else {
+            self.flags &= !(1 << 1);
+        }
+
+        self
+    }
+
+    pub fn exclusive(mut self, value: bool) -> Self {
+        if value {
+            self.flags |= 1 << 2;
+        } else {
+            self.flags &= !(1 << 2);
+        }
+
+        self
+    }
+
+    pub fn auto_delete(mut self, value: bool) -> Self {
+        if value {
+            self.flags |= 1 << 3;
+        } else {
+            self.flags &= !(1 << 3);
+        }
+
+        self
+    }
+
+    pub fn no_wait(mut self, value: bool) -> Self {
+        if value {
+            self.flags |= 1 << 4;
+        } else {
+            self.flags &= !(1 << 4);
+        }
+
+        self
+    }
+
+    fn has_no_wait(self) -> bool {
+        (self.flags & (1 << 4)) != 0
+    }
+}
+
+impl Into<u8> for AmqpQueueFlags {
     fn into(self) -> u8 {
         self.flags
     }

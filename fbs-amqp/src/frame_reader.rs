@@ -82,6 +82,12 @@ impl<'buffer> AmqpFrameReader<'buffer> {
             (AMQP_CLASS_EXCHANGE, AMQP_METHOD_EXCHANGE_DELETE_OK) => {
                 Ok(AmqpMethod::ExchangeDeleteOk())
             },
+            (AMQP_CLASS_QUEUE, AMQP_METHOD_QUEUE_DECLARE_OK) => {
+                let name = self.read_short_string()?;
+                let message_count = self.read_i32()?;
+                let consumer_count = self.read_i32()?;
+                Ok(AmqpMethod::QueueDeclareOk(name, message_count, consumer_count))
+            },
             (_, _) => Err(AmqpFrameError::InvalidClassMethod(class_id, method_id))
         }
     }

@@ -104,6 +104,17 @@ enum AmqpQueueMethodId {
     DeleteOk        = 41,
 }
 
+pub const AMQP_METHOD_QUEUE_DECLARE: u16        = 10;
+pub const AMQP_METHOD_QUEUE_DECLARE_OK: u16     = 11;
+pub const AMQP_METHOD_QUEUE_BIND: u16           = 20;
+pub const AMQP_METHOD_QUEUE_BIND_OK: u16        = 21;
+pub const AMQP_METHOD_QUEUE_UNBIND: u16         = 50;
+pub const AMQP_METHOD_QUEUE_UNBIND_OK: u16      = 51;
+pub const AMQP_METHOD_QUEUE_PURGE: u16          = 30;
+pub const AMQP_METHOD_QUEUE_PURGE_OK: u16       = 31;
+pub const AMQP_METHOD_QUEUE_DELETE: u16         = 40;
+pub const AMQP_METHOD_QUEUE_DELETE_OK: u16      = 41;
+
 #[derive(Debug, Clone, Copy)]
 enum AmqpBasicMethodId {
     Qos             = 10,
