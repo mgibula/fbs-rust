@@ -225,6 +225,21 @@ impl AmqpChannel {
             Ok(0)
         }
     }
+
+    pub async fn qos(&mut self, prefetch_size: i32, prefetch_count: i16, global: bool) -> Result<(), AmqpConnectionError> {
+        self.ptr.is_channel_valid()?;
+
+        let frame = AmqpFrame {
+            channel: self.ptr.number.get() as u16,
+            payload: AmqpFramePayload::Method(AmqpMethod::BasicQos(prefetch_size, prefetch_count, global)),
+        };
+
+        self.ptr.connection.writer_queue.send(Some(frame));
+        self.ptr.wait_list.basic_qos_ok.set(true);
+        self.ptr.rx.receive().await?;
+
+        Ok(())
+    }
 }
 
 struct AmqpChannelInternals {
@@ -249,6 +264,7 @@ struct FrameWaiter {
     pub queue_unbind_ok: Cell<bool>,
     pub queue_purge_ok: Cell<bool>,
     pub queue_delete_ok: Cell<bool>,
+    pub basic_qos_ok: Cell<bool>,
 }
 
 impl AmqpChannelInternals {
@@ -339,6 +355,11 @@ impl AmqpChannelInternals {
             },
             AmqpFramePayload::Method(AmqpMethod::QueueDeleteOk(_)) if self.wait_list.queue_delete_ok.get() => {
                 self.wait_list.queue_delete_ok.set(true);
+                self.tx.send(Ok(frame));
+                Ok(())
+            },
+            AmqpFramePayload::Method(AmqpMethod::BasicQosOk()) if self.wait_list.basic_qos_ok.get() => {
+                self.wait_list.basic_qos_ok.set(true);
                 self.tx.send(Ok(frame));
                 Ok(())
             },
@@ -781,6 +802,9 @@ mod tests {
 
             let _ = channel.purge_queue("test-queue".to_string(), false).await;
             println!("After queue purge!");
+
+            let _ = channel.qos(0, 1, false).await;
+            println!("After basic qos!");
 
             let _ = channel.unbind_queue("test-queue".to_string(), "test-exchange".to_string(), "test-key".to_string()).await;
             println!("After queue unbind!");

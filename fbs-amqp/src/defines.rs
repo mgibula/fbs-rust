@@ -136,6 +136,24 @@ enum AmqpBasicMethodId {
     RecoverOk       = 111,
 }
 
+pub const AMQP_METHOD_BASIC_QOS: u16            = 10;
+pub const AMQP_METHOD_BASIC_QOS_OK: u16         = 11;
+pub const AMQP_METHOD_BASIC_CONSUME: u16        = 20;
+pub const AMQP_METHOD_BASIC_CONSUME_OK: u16     = 21;
+pub const AMQP_METHOD_BASIC_CANCEL: u16         = 30;
+pub const AMQP_METHOD_BASIC_CANCEL_OK: u16      = 31;
+pub const AMQP_METHOD_BASIC_PUBLISH: u16        = 40;
+pub const AMQP_METHOD_BASIC_RETURN: u16         = 50;
+pub const AMQP_METHOD_BASIC_DELIVER: u16        = 60;
+pub const AMQP_METHOD_BASIC_GET: u16            = 70;
+pub const AMQP_METHOD_BASIC_GET_OK: u16         = 71;
+pub const AMQP_METHOD_BASIC_GET_EMPTY: u16      = 72;
+pub const AMQP_METHOD_BASIC_ACK: u16            = 80;
+pub const AMQP_METHOD_BASIC_REJECT: u16         = 90;
+pub const AMQP_METHOD_BASIC_RECOVERY_ASYNC: u16 = 100;
+pub const AMQP_METHOD_BASIC_RECOVER: u16        = 110;
+pub const AMQP_METHOD_BASIC_RECOVER_OK: u16     = 111;
+
 #[derive(Debug, Clone, Copy)]
 enum AmqpTxMethodId {
     Select          = 10,

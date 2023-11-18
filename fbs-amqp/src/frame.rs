@@ -60,6 +60,8 @@ pub enum AmqpMethod {
     QueuePurgeOk(i32),                                                              // messages
     QueueDelete(String, u8),                                                        // name, flags
     QueueDeleteOk(i32),                                                             // messages
+    BasicQos(i32, i16, bool),                                                       // size, count, global
+    BasicQosOk(),
 }
 
 #[derive(Debug, Clone)]

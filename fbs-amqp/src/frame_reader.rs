@@ -102,6 +102,9 @@ impl<'buffer> AmqpFrameReader<'buffer> {
                 let messages = self.read_i32()?;
                 Ok(AmqpMethod::QueueDeleteOk(messages))
             },
+            (AMQP_CLASS_BASIC, AMQP_METHOD_BASIC_QOS_OK) => {
+                Ok(AmqpMethod::BasicQosOk())
+            },
             (_, _) => Err(AmqpFrameError::InvalidClassMethod(class_id, method_id))
         }
     }
