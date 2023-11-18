@@ -54,6 +54,8 @@ pub enum AmqpMethod {
     QueueDeclareOk(String, i32, i32),
     QueueBind(String, String, String, u8, HashMap<String, AmqpData>),               // name, exchange, routing-key, flags, arguments
     QueueBindOk(),
+    QueueUnbind(String, String, String, HashMap<String, AmqpData>),                 // name, exchange, routing-key, arguments
+    QueueUnbindOk(),
     // Channel(ChannelMethod),
     // Exchange(ExchangeMethod),
     // Queue(QueueMethod),

@@ -91,6 +91,9 @@ impl<'buffer> AmqpFrameReader<'buffer> {
             (AMQP_CLASS_QUEUE, AMQP_METHOD_QUEUE_BIND_OK) => {
                 Ok(AmqpMethod::QueueBindOk())
             },
+            (AMQP_CLASS_QUEUE, AMQP_METHOD_QUEUE_UNBIND_OK) => {
+                Ok(AmqpMethod::QueueUnbindOk())
+            },
             (_, _) => Err(AmqpFrameError::InvalidClassMethod(class_id, method_id))
         }
     }
