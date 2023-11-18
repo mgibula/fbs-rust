@@ -97,45 +97,21 @@ impl FrameWriter {
                 write_u16(&mut result, AMQP_METHOD_CHANNEL_FLOW_OK);
                 write_u8(&mut result, (*active) as u8);
             },
-            AmqpMethod::ExchangeDeclare(name, exchange_type, passive, durable, no_wait, arguments) => {
+            AmqpMethod::ExchangeDeclare(name, exchange_type, flags, arguments) => {
                 write_u16(&mut result, AMQP_CLASS_EXCHANGE);
                 write_u16(&mut result, AMQP_METHOD_EXCHANGE_DECLARE);
                 write_u16(&mut result, 0);      // deprecated
                 write_short_string(&mut result, &name);
                 write_short_string(&mut result, &exchange_type);
-
-                let mut flags: u8 = 0;
-                if *passive {
-                    flags |= 1 << 0;
-                }
-
-                if *durable {
-                    flags |= 1 << 1;
-                }
-
-                if *no_wait {
-                    flags |= 1 << 4;
-                }
-
-                write_u8(&mut result, flags);
+                write_u8(&mut result, *flags);
                 write_table(&mut result, arguments);
             },
-            AmqpMethod::ExchangeDelete(name, if_unused, no_wait) => {
+            AmqpMethod::ExchangeDelete(name, flags) => {
                 write_u16(&mut result, AMQP_CLASS_EXCHANGE);
                 write_u16(&mut result, AMQP_METHOD_EXCHANGE_DELETE);
                 write_u16(&mut result, 0);      // deprecated
                 write_short_string(&mut result, &name);
-
-                let mut flags: u8 = 0;
-                if *if_unused {
-                    flags |= 1 << 0;
-                }
-
-                if *no_wait {
-                    flags |= 1 << 1;
-                }
-
-                write_u8(&mut result, flags);
+                write_u8(&mut result, *flags);
             },
             _ => panic!("Attempting to write unsupported frame type"),
         }

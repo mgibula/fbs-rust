@@ -14,6 +14,7 @@ use fbs_executor::TaskHandle;
 use super::frame::{AmqpProtocolHeader, AmqpFrame, AmqpFrameError, AmqpFramePayload, AmqpMethod};
 use super::frame_reader::AmqpFrameReader;
 use super::frame_writer::FrameWriter;
+use super::{AmqpDeleteExchangeFlags, AmqpExchangeFlags};
 
 use thiserror::Error;
 
@@ -88,28 +89,30 @@ impl AmqpChannel {
         Ok(())
     }
 
-    pub async fn declare_exchange(&mut self, name: String, exchange_type: String) -> Result<(), AmqpConnectionError> {
+    pub async fn declare_exchange(&mut self, name: String, exchange_type: String, flags: AmqpExchangeFlags) -> Result<(), AmqpConnectionError> {
         self.ptr.connection.is_connection_valid()?;
 
         let frame = AmqpFrame {
             channel: self.ptr.number.get() as u16,
-            payload: AmqpFramePayload::Method(AmqpMethod::ExchangeDeclare(name, exchange_type, false, true, false, HashMap::new())),
+            payload: AmqpFramePayload::Method(AmqpMethod::ExchangeDeclare(name, exchange_type, flags.into(), HashMap::new())),
         };
 
         self.ptr.connection.writer_queue.send(Some(frame));
 
-        self.ptr.wait_list.exchange_declare_ok.set(true);
-        self.ptr.rx.receive().await?;
+        if !flags.has_no_wait() {
+            self.ptr.wait_list.exchange_declare_ok.set(true);
+            self.ptr.rx.receive().await?;
+        }
 
         Ok(())
     }
 
-    pub async fn delete_exchange(&mut self, name: String, if_unused: bool) -> Result<(), AmqpConnectionError> {
+    pub async fn delete_exchange(&mut self, name: String, flags: AmqpDeleteExchangeFlags) -> Result<(), AmqpConnectionError> {
         self.ptr.connection.is_connection_valid()?;
 
         let frame = AmqpFrame {
             channel: self.ptr.number.get() as u16,
-            payload: AmqpFramePayload::Method(AmqpMethod::ExchangeDelete(name, if_unused, false)),
+            payload: AmqpFramePayload::Method(AmqpMethod::ExchangeDelete(name, flags.into())),
         };
 
         self.ptr.connection.writer_queue.send(Some(frame));
@@ -596,7 +599,8 @@ mod tests {
     fn good_connect_test() {
         async_run(async {
             let mut amqp = AmqpConnection::new("localhost".to_string());
-            let _ = amqp.connect("guest", "guest").await;
+            let result = amqp.connect("guest", "guest").await;
+            dbg!(result);
 
             let mut channel = amqp.channel_open().await.unwrap();
             println!("Got channel opened!");
@@ -605,10 +609,10 @@ mod tests {
             println!("After flow!");
             dbg!(flow);
 
-            let r = channel.declare_exchange("test-exchange".to_string(), "direct".to_string()).await;
+            let r = channel.declare_exchange("test-exchange".to_string(), "direct".to_string(), AmqpExchangeFlags::new()).await;
             println!("After declare exchange!");
 
-            let r = channel.delete_exchange("test-exchange".to_string(), true).await;
+            let r = channel.delete_exchange("test-exchange".to_string(), AmqpDeleteExchangeFlags::new().if_unused(true)).await;
             println!("After delete exchange!");
 
             let r2 = channel.close().await;
