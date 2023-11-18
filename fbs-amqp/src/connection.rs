@@ -40,6 +40,8 @@ pub enum AmqpConnectionError {
     ConnectionClosedByServer(u16, String, u16, u16),
     #[error("Protocol error")]
     ProtocolError(AmqpFrame),
+    #[error("Channel closed by server")]
+    ChannelClosedByServer(u16, String, u16, u16),
 }
 
 pub struct AmqpConnection {
@@ -58,7 +60,7 @@ impl AmqpChannel {
     }
 
     pub async fn close(self) -> Result<(), AmqpConnectionError> {
-        self.ptr.connection.is_connection_valid()?;
+        self.ptr.is_channel_valid()?;
 
         let frame = AmqpFrame {
             channel: self.ptr.number.get() as u16,
@@ -76,7 +78,7 @@ impl AmqpChannel {
     }
 
     pub async fn flow(&mut self, active: bool) -> Result<(), AmqpConnectionError> {
-        self.ptr.connection.is_connection_valid()?;
+        self.ptr.is_channel_valid()?;
 
         let frame = AmqpFrame {
             channel: self.ptr.number.get() as u16,
@@ -92,7 +94,7 @@ impl AmqpChannel {
     }
 
     pub async fn declare_exchange(&mut self, name: String, exchange_type: String, flags: AmqpExchangeFlags) -> Result<(), AmqpConnectionError> {
-        self.ptr.connection.is_connection_valid()?;
+        self.ptr.is_channel_valid()?;
 
         let frame = AmqpFrame {
             channel: self.ptr.number.get() as u16,
@@ -110,7 +112,7 @@ impl AmqpChannel {
     }
 
     pub async fn delete_exchange(&mut self, name: String, flags: AmqpDeleteExchangeFlags) -> Result<(), AmqpConnectionError> {
-        self.ptr.connection.is_connection_valid()?;
+        self.ptr.is_channel_valid()?;
 
         let frame = AmqpFrame {
             channel: self.ptr.number.get() as u16,
@@ -126,7 +128,7 @@ impl AmqpChannel {
     }
 
     pub async fn declare_queue(&mut self, name: String, flags: AmqpQueueFlags) -> Result<(String, i32, i32), AmqpConnectionError> {
-        self.ptr.connection.is_connection_valid()?;
+        self.ptr.is_channel_valid()?;
 
         let frame = AmqpFrame {
             channel: self.ptr.number.get() as u16,
@@ -148,7 +150,7 @@ impl AmqpChannel {
     }
 
     pub async fn bind_queue(&mut self, name: String, exchange: String, routing_key: String, no_wait: bool) -> Result<(), AmqpConnectionError> {
-        self.ptr.connection.is_connection_valid()?;
+        self.ptr.is_channel_valid()?;
 
         let frame = AmqpFrame {
             channel: self.ptr.number.get() as u16,
@@ -173,6 +175,7 @@ struct AmqpChannelInternals {
     wait_list: FrameWaiter,
     number: Cell<usize>,
     active: Cell<bool>,
+    last_error: RefCell<Option<AmqpConnectionError>>,
 }
 
 #[derive(Debug, Default)]
@@ -196,18 +199,35 @@ impl AmqpChannelInternals {
             active: Cell::new(true),
             rx,
             tx,
+            last_error: RefCell::new(None),
         }
     }
 
-    fn handle_frame(&self, frame: AmqpFrame) {
+    fn is_channel_valid(&self) -> Result<(), AmqpConnectionError> {
+        let last_error = self.last_error.borrow();
+        match *last_error {
+            None => self.connection.is_connection_valid(),
+            Some(ref error) => Err(error.clone()),
+        }
+    }
+
+    fn handle_frame(&self, frame: AmqpFrame) -> Result<(), ()> {
         match frame.payload {
+            AmqpFramePayload::Method(AmqpMethod::ChannelClose(code, reason, class, method)) => {
+                let error = AmqpConnectionError::ChannelClosedByServer(code, reason, class, method);
+                *self.last_error.borrow_mut() = Some(error.clone());
+                self.tx.send(Err(error));
+                Err(())
+            },
             AmqpFramePayload::Method(AmqpMethod::ChannelCloseOk()) if self.wait_list.channel_close_ok.get() => {
                 self.wait_list.channel_close_ok.set(false);
                 self.tx.send(Ok(frame));
+                Ok(())
             },
             AmqpFramePayload::Method(AmqpMethod::ChannelOpenOk()) if self.wait_list.channel_open_ok.get() => {
                 self.wait_list.channel_open_ok.set(false);
                 self.tx.send(Ok(frame));
+                Ok(())
             },
             AmqpFramePayload::Method(AmqpMethod::ChannelFlow(active)) => {
                 self.active.set(active);
@@ -218,28 +238,34 @@ impl AmqpChannelInternals {
                 };
 
                 self.connection.writer_queue.send(Some(frame));
+                Ok(())
             },
             AmqpFramePayload::Method(AmqpMethod::ChannelFlowOk(_)) if self.wait_list.channel_flow_ok.get() => {
                 self.wait_list.channel_flow_ok.set(false);
                 self.tx.send(Ok(frame));
+                Ok(())
             },
             AmqpFramePayload::Method(AmqpMethod::ExchangeDeclareOk()) if self.wait_list.exchange_declare_ok.get() => {
                 self.wait_list.exchange_declare_ok.set(false);
                 self.tx.send(Ok(frame));
+                Ok(())
             },
             AmqpFramePayload::Method(AmqpMethod::ExchangeDeleteOk()) if self.wait_list.exchange_delete_ok.get() => {
                 self.wait_list.exchange_delete_ok.set(false);
                 self.tx.send(Ok(frame));
+                Ok(())
             },
             AmqpFramePayload::Method(AmqpMethod::QueueDeclareOk(_, _, _)) if self.wait_list.queue_declare_ok.get() => {
                 self.wait_list.queue_declare_ok.set(false);
                 self.tx.send(Ok(frame));
+                Ok(())
             },
             AmqpFramePayload::Method(AmqpMethod::QueueBindOk()) if self.wait_list.queue_bind_ok.get() => {
                 self.wait_list.queue_bind_ok.set(false);
                 self.tx.send(Ok(frame));
+                Ok(())
             },
-            _ => (),
+            _ => Ok(()),
         }
     }
 }
@@ -472,15 +498,21 @@ impl AmqpConnectionInternal {
     }
 
     fn handle_channel_frame(&self, frame: AmqpFrame) {
-        let index = (frame.channel - 1) as usize;
+        let index = frame.channel as usize;
         let mut channels = self.channels.borrow_mut();
 
-        let channel = channels.get_mut(index);
+        let channel = channels.get_mut(index - 1);
+        let mut close_channel = false;
         match channel {
             None => (),
             Some(channel) => {
-                channel.handle_frame(frame);
+                close_channel = channel.handle_frame(frame).is_err();
             },
+        }
+
+        drop(channels);
+        if close_channel {
+            self.clear_channel(index);
         }
     }
 
