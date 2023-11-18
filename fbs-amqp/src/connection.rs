@@ -181,6 +181,28 @@ impl AmqpChannel {
 
         Ok(())
     }
+
+    pub async fn purge_queue(&mut self, name: String, no_wait: bool) -> Result<i32, AmqpConnectionError> {
+        self.ptr.is_channel_valid()?;
+
+        let frame = AmqpFrame {
+            channel: self.ptr.number.get() as u16,
+            payload: AmqpFramePayload::Method(AmqpMethod::QueuePurge(name, no_wait as u8)),
+        };
+
+        self.ptr.connection.writer_queue.send(Some(frame));
+
+        if !no_wait {
+            self.ptr.wait_list.queue_purge_ok.set(true);
+            let frame = self.ptr.rx.receive().await?;
+            match frame.payload {
+                AmqpFramePayload::Method(AmqpMethod::QueuePurgeOk(messages)) => Ok(messages),
+                _ => Err(AmqpConnectionError::ProtocolError(frame)),
+            }
+        } else {
+            Ok(0)
+        }
+    }
 }
 
 struct AmqpChannelInternals {
@@ -203,6 +225,7 @@ struct FrameWaiter {
     pub queue_declare_ok: Cell<bool>,
     pub queue_bind_ok: Cell<bool>,
     pub queue_unbind_ok: Cell<bool>,
+    pub queue_purge_ok: Cell<bool>,
 }
 
 impl AmqpChannelInternals {
@@ -283,6 +306,11 @@ impl AmqpChannelInternals {
             },
             AmqpFramePayload::Method(AmqpMethod::QueueUnbindOk()) if self.wait_list.queue_unbind_ok.get() => {
                 self.wait_list.queue_unbind_ok.set(false);
+                self.tx.send(Ok(frame));
+                Ok(())
+            },
+            AmqpFramePayload::Method(AmqpMethod::QueuePurgeOk(_)) if self.wait_list.queue_purge_ok.get() => {
+                self.wait_list.queue_purge_ok.set(false);
                 self.tx.send(Ok(frame));
                 Ok(())
             },
@@ -722,6 +750,9 @@ mod tests {
 
             let _ = channel.bind_queue("test-queue".to_string(), "test-exchange".to_string(), "test-key".to_string(), false).await;
             println!("After queue bind!");
+
+            let _ = channel.purge_queue("test-queue".to_string(), false).await;
+            println!("After queue purge!");
 
             let _ = channel.unbind_queue("test-queue".to_string(), "test-exchange".to_string(), "test-key".to_string()).await;
             println!("After queue unbind!");

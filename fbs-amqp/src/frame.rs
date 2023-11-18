@@ -51,11 +51,13 @@ pub enum AmqpMethod {
     ExchangeDelete(String, u8),                                                     // name, flags
     ExchangeDeleteOk(),
     QueueDeclare(String, u8, HashMap<String, AmqpData>),                            // name, flags, arguments
-    QueueDeclareOk(String, i32, i32),
+    QueueDeclareOk(String, i32, i32),                                               // name, messages, consumers
     QueueBind(String, String, String, u8, HashMap<String, AmqpData>),               // name, exchange, routing-key, flags, arguments
     QueueBindOk(),
     QueueUnbind(String, String, String, HashMap<String, AmqpData>),                 // name, exchange, routing-key, arguments
     QueueUnbindOk(),
+    QueuePurge(String, u8),                                                         // name, flags
+    QueuePurgeOk(i32),                                                              // messages
     // Channel(ChannelMethod),
     // Exchange(ExchangeMethod),
     // Queue(QueueMethod),
