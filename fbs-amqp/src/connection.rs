@@ -146,6 +146,24 @@ impl AmqpChannel {
             Ok(("".to_string(), 0, 0))
         }
     }
+
+    pub async fn bind_queue(&mut self, name: String, exchange: String, routing_key: String, no_wait: bool) -> Result<(), AmqpConnectionError> {
+        self.ptr.connection.is_connection_valid()?;
+
+        let frame = AmqpFrame {
+            channel: self.ptr.number.get() as u16,
+            payload: AmqpFramePayload::Method(AmqpMethod::QueueBind(name, exchange, routing_key, no_wait as u8, HashMap::new())),
+        };
+
+        self.ptr.connection.writer_queue.send(Some(frame));
+
+        if !no_wait {
+            self.ptr.wait_list.queue_bind_ok.set(true);
+            self.ptr.rx.receive().await?;
+        }
+
+        Ok(())
+    }
 }
 
 struct AmqpChannelInternals {
@@ -165,6 +183,7 @@ struct FrameWaiter {
     pub exchange_declare_ok: Cell<bool>,
     pub exchange_delete_ok: Cell<bool>,
     pub queue_declare_ok: Cell<bool>,
+    pub queue_bind_ok: Cell<bool>,
 }
 
 impl AmqpChannelInternals {
@@ -214,6 +233,10 @@ impl AmqpChannelInternals {
             },
             AmqpFramePayload::Method(AmqpMethod::QueueDeclareOk(_, _, _)) if self.wait_list.queue_declare_ok.get() => {
                 self.wait_list.queue_declare_ok.set(false);
+                self.tx.send(Ok(frame));
+            },
+            AmqpFramePayload::Method(AmqpMethod::QueueBindOk()) if self.wait_list.queue_bind_ok.get() => {
+                self.wait_list.queue_bind_ok.set(false);
                 self.tx.send(Ok(frame));
             },
             _ => (),
@@ -641,13 +664,15 @@ mod tests {
             let r = channel.declare_exchange("test-exchange".to_string(), "direct".to_string(), AmqpExchangeFlags::new()).await;
             println!("After declare exchange!");
 
-            let r = channel.delete_exchange("test-exchange".to_string(), AmqpDeleteExchangeFlags::new().if_unused(true)).await;
-            println!("After delete exchange!");
-
             let r = channel.declare_queue("test-queue".to_string(), AmqpQueueFlags::new().durable(true)).await;
             println!("After declare queue!");
 
+            let r = channel.bind_queue("test-quedue".to_string(), "test-exchange".to_string(), "test-key".to_string(), false).await;
+            println!("After queue bind!");
             dbg!(r);
+
+            // let r = channel.delete_exchange("test-exchange".to_string(), AmqpDeleteExchangeFlags::new().if_unused(true)).await;
+            // println!("After delete exchange!");
 
             let r2 = channel.close().await;
             dbg!(r2);

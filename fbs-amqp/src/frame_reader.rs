@@ -88,6 +88,9 @@ impl<'buffer> AmqpFrameReader<'buffer> {
                 let consumer_count = self.read_i32()?;
                 Ok(AmqpMethod::QueueDeclareOk(name, message_count, consumer_count))
             },
+            (AMQP_CLASS_QUEUE, AMQP_METHOD_QUEUE_BIND_OK) => {
+                Ok(AmqpMethod::QueueBindOk())
+            },
             (_, _) => Err(AmqpFrameError::InvalidClassMethod(class_id, method_id))
         }
     }
