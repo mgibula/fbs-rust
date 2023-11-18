@@ -64,6 +64,8 @@ pub enum AmqpMethod {
     BasicQosOk(),
     BasicConsume(String, String, u8, HashMap<String, AmqpData>),                    // queue, tag, flags, arguments
     BasicConsumeOk(String),                                                         // tag
+    BasicCancel(String, u8),                                                        // tag, no-wait
+    BasicCancelOk(String),                                                          // tag
 }
 
 #[derive(Debug, Clone)]

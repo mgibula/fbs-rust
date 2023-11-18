@@ -262,6 +262,28 @@ impl AmqpChannel {
             Ok(String::new())
         }
     }
+
+    pub async fn cancel(&mut self, tag: String, no_wait: bool) -> Result<String, AmqpConnectionError> {
+        self.ptr.is_channel_valid()?;
+
+        let frame = AmqpFrame {
+            channel: self.ptr.number.get() as u16,
+            payload: AmqpFramePayload::Method(AmqpMethod::BasicCancel(tag, no_wait as u8)),
+        };
+
+        self.ptr.connection.writer_queue.send(Some(frame));
+
+        if !no_wait {
+            self.ptr.wait_list.basic_cancel_ok.set(true);
+            let frame = self.ptr.rx.receive().await?;
+            match frame.payload {
+                AmqpFramePayload::Method(AmqpMethod::BasicCancelOk(tag)) => Ok(tag),
+                _ => Err(AmqpConnectionError::ProtocolError(frame)),
+            }
+        } else {
+            Ok(String::new())
+        }
+    }
 }
 
 struct AmqpChannelInternals {
@@ -288,6 +310,7 @@ struct FrameWaiter {
     pub queue_delete_ok: Cell<bool>,
     pub basic_qos_ok: Cell<bool>,
     pub basic_consume_ok: Cell<bool>,
+    pub basic_cancel_ok: Cell<bool>,
 }
 
 impl AmqpChannelInternals {
@@ -388,6 +411,11 @@ impl AmqpChannelInternals {
             },
             AmqpFramePayload::Method(AmqpMethod::BasicConsumeOk(_)) if self.wait_list.basic_consume_ok.get() => {
                 self.wait_list.basic_consume_ok.set(true);
+                self.tx.send(Ok(frame));
+                Ok(())
+            },
+            AmqpFramePayload::Method(AmqpMethod::BasicCancelOk(_)) if self.wait_list.basic_cancel_ok.get() => {
+                self.wait_list.basic_cancel_ok.set(true);
                 self.tx.send(Ok(frame));
                 Ok(())
             },
@@ -834,8 +862,11 @@ mod tests {
             let _ = channel.qos(0, 1, false).await;
             println!("After basic qos!");
 
-            let _ = channel.consume("test-queue".to_string(), String::new(), AmqpConsumeFlags::new()).await;
-            println!("After basic qos!");
+            let tag = channel.consume("test-queue".to_string(), String::new(), AmqpConsumeFlags::new()).await.unwrap();
+            println!("After basic consume!");
+
+            let _ = channel.cancel(tag, false).await;
+            println!("After basic cancel!");
 
             let _ = channel.unbind_queue("test-queue".to_string(), "test-exchange".to_string(), "test-key".to_string()).await;
             println!("After queue unbind!");
