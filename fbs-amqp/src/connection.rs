@@ -14,7 +14,7 @@ use fbs_executor::TaskHandle;
 use super::frame::{AmqpProtocolHeader, AmqpFrame, AmqpFrameError, AmqpFramePayload, AmqpMethod};
 use super::frame_reader::AmqpFrameReader;
 use super::frame_writer::FrameWriter;
-use super::{AmqpDeleteExchangeFlags, AmqpExchangeFlags, AmqpQueueFlags};
+use super::{AmqpDeleteExchangeFlags, AmqpExchangeFlags, AmqpQueueFlags, AmqpDeleteQueueFlags};
 
 use thiserror::Error;
 
@@ -203,6 +203,28 @@ impl AmqpChannel {
             Ok(0)
         }
     }
+
+    pub async fn delete_queue(&mut self, name: String, flags: AmqpDeleteQueueFlags) -> Result<i32, AmqpConnectionError> {
+        self.ptr.is_channel_valid()?;
+
+        let frame = AmqpFrame {
+            channel: self.ptr.number.get() as u16,
+            payload: AmqpFramePayload::Method(AmqpMethod::QueueDelete(name, flags.into())),
+        };
+
+        self.ptr.connection.writer_queue.send(Some(frame));
+
+        if !flags.has_no_wait() {
+            self.ptr.wait_list.queue_delete_ok.set(true);
+            let frame = self.ptr.rx.receive().await?;
+            match frame.payload {
+                AmqpFramePayload::Method(AmqpMethod::QueueDeleteOk(messages)) => Ok(messages),
+                _ => Err(AmqpConnectionError::ProtocolError(frame)),
+            }
+        } else {
+            Ok(0)
+        }
+    }
 }
 
 struct AmqpChannelInternals {
@@ -226,6 +248,7 @@ struct FrameWaiter {
     pub queue_bind_ok: Cell<bool>,
     pub queue_unbind_ok: Cell<bool>,
     pub queue_purge_ok: Cell<bool>,
+    pub queue_delete_ok: Cell<bool>,
 }
 
 impl AmqpChannelInternals {
@@ -311,6 +334,11 @@ impl AmqpChannelInternals {
             },
             AmqpFramePayload::Method(AmqpMethod::QueuePurgeOk(_)) if self.wait_list.queue_purge_ok.get() => {
                 self.wait_list.queue_purge_ok.set(false);
+                self.tx.send(Ok(frame));
+                Ok(())
+            },
+            AmqpFramePayload::Method(AmqpMethod::QueueDeleteOk(_)) if self.wait_list.queue_delete_ok.get() => {
+                self.wait_list.queue_delete_ok.set(true);
                 self.tx.send(Ok(frame));
                 Ok(())
             },
@@ -756,6 +784,9 @@ mod tests {
 
             let _ = channel.unbind_queue("test-queue".to_string(), "test-exchange".to_string(), "test-key".to_string()).await;
             println!("After queue unbind!");
+
+            let _ = channel.delete_queue("test-queue".to_string(), AmqpDeleteQueueFlags::new()).await;
+            println!("After queue delete!");
 
             let _ = channel.delete_exchange("test-exchange".to_string(), AmqpDeleteExchangeFlags::new().if_unused(true)).await;
             println!("After delete exchange!");

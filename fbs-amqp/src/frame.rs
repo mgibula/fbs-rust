@@ -58,11 +58,8 @@ pub enum AmqpMethod {
     QueueUnbindOk(),
     QueuePurge(String, u8),                                                         // name, flags
     QueuePurgeOk(i32),                                                              // messages
-    // Channel(ChannelMethod),
-    // Exchange(ExchangeMethod),
-    // Queue(QueueMethod),
-    // Basic(BasicMethod),
-    // Tx(TxMethod),
+    QueueDelete(String, u8),                                                        // name, flags
+    QueueDeleteOk(i32),                                                             // messages
 }
 
 #[derive(Debug, Clone)]

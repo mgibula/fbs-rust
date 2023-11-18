@@ -167,3 +167,55 @@ impl Into<u8> for AmqpQueueFlags {
         self.flags
     }
 }
+
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct AmqpDeleteQueueFlags {
+    flags: u8,
+}
+
+impl AmqpDeleteQueueFlags {
+    pub fn new() -> Self {
+        Self { flags: 0 }
+    }
+
+    pub fn if_unused(mut self, value: bool) -> Self {
+        if value {
+            self.flags |= 1 << 0;
+        } else {
+            self.flags &= !(1 << 0);
+        }
+
+        self
+    }
+
+    pub fn if_empty(mut self, value: bool) -> Self {
+        if value {
+            self.flags |= 1 << 1;
+        } else {
+            self.flags &= !(1 << 1);
+        }
+
+        self
+    }
+
+    pub fn no_wait(mut self, value: bool) -> Self {
+        if value {
+            self.flags |= 1 << 2;
+        } else {
+            self.flags &= !(1 << 2);
+        }
+
+        self
+    }
+
+    fn has_no_wait(self) -> bool {
+        (self.flags & (1 << 2)) != 0
+    }
+}
+
+impl Into<u8> for AmqpDeleteQueueFlags {
+    fn into(self) -> u8 {
+        self.flags
+    }
+}
