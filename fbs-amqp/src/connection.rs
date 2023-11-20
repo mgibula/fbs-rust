@@ -62,7 +62,7 @@ impl AmqpChannel {
         Self { ptr: Rc::new(AmqpChannelInternals::new(connection)) }
     }
 
-    pub fn set_on_return(&mut self, callback: Option<Box<dyn Fn(i16, String, String, String)>>) {
+    pub fn set_on_return(&mut self, callback: Option<Box<dyn Fn(i16, String, String, String, AmqpMessage)>>) {
         *self.ptr.on_return.borrow_mut() = callback;
     }
 
@@ -335,7 +335,7 @@ struct AmqpChannelInternals {
     number: Cell<usize>,
     active: Cell<bool>,
     last_error: RefCell<Option<AmqpConnectionError>>,
-    on_return: RefCell<Option<Box<dyn Fn(i16, String, String, String)>>>,
+    on_return: RefCell<Option<Box<dyn Fn(i16, String, String, String, AmqpMessage)>>>,
     message_in_flight: RefCell<AmqpMessageBuilder>,
 }
 
@@ -382,12 +382,26 @@ impl AmqpChannelInternals {
 
     fn handle_frame(&self, frame: AmqpFrame) -> Result<(), AmqpConnectionError> {
         match frame.payload {
-            AmqpFramePayload::Header(class_id, size, properties) => {
+            AmqpFramePayload::Header(_, size, properties) => {
                 self.message_in_flight.borrow_mut().prepare_from_header(size, properties)?;
                 Ok(())
             },
             AmqpFramePayload::Content(data) => {
                 self.message_in_flight.borrow_mut().append_data(&data)?;
+                let frame = self.message_in_flight.borrow_mut().build_if_completed()?;
+                match frame {
+                    None => (),
+                    Some((MessageDeliveryMode::Return(code, reason, class, method), message)) => {
+                        match &*self.on_return.borrow_mut() {
+                            None => (),
+                            Some(callback) => {
+                                callback(code, reason, class, method, message);
+                            },
+                        }
+                    },
+                    Some(_) => (),
+                };
+
                 Ok(())
             },
             AmqpFramePayload::Method(AmqpMethod::ChannelClose(code, reason, class, method)) => {
@@ -398,10 +412,6 @@ impl AmqpChannelInternals {
             },
             AmqpFramePayload::Method(AmqpMethod::BasicReturn(code, reason, exchange, routing_key)) => {
                 self.message_in_flight.borrow_mut().prepare_mode(MessageDeliveryMode::Return(code, reason, exchange, routing_key))?;
-                // match &*self.on_return.borrow() {
-                //     None => (),
-                //     Some(callback) => callback(code, reason, exchange, routing_key),
-                // };
                 Ok(())
             },
             AmqpFramePayload::Method(AmqpMethod::ChannelCloseOk()) if self.wait_list.channel_close_ok.get() => {
@@ -940,13 +950,13 @@ struct AmqpMessageBuilder {
 }
 
 impl AmqpMessageBuilder {
-    pub(crate) fn build(&mut self) -> Result<Option<AmqpMessage>, AmqpConnectionError> {
+    pub(crate) fn build_if_completed(&mut self) -> Result<Option<(MessageDeliveryMode, AmqpMessage)>, AmqpConnectionError> {
         if !self.is_prepared() {
             return Ok(None);
         }
 
         let result = if self.is_complete() {
-            Ok(Some(AmqpMessage { properties: std::mem::take(&mut self.properties), content: std::mem::take(&mut self.content) }))
+            Ok(Some((std::mem::take(&mut self.mode), AmqpMessage { properties: std::mem::take(&mut self.properties), content: std::mem::take(&mut self.content) })))
         } else {
             eprintln!("Discarding incomplete frame");
             Ok(None)
@@ -963,18 +973,14 @@ impl AmqpMessageBuilder {
         Ok(())
     }
 
-    pub fn prepare_from_header(&mut self, size: u64, properties: AmqpBasicProperties) -> Result<(), AmqpConnectionError> {
-        if self.is_prepared() {
-            return Err(AmqpConnectionError::ProtocolError("Extraneous header frame received"));
-        }
-
+    fn prepare_from_header(&mut self, size: u64, properties: AmqpBasicProperties) -> Result<(), AmqpConnectionError> {
         self.properties = properties;
         self.size = size as usize;
         self.content = Vec::with_capacity(size as usize);
         Ok(())
     }
 
-    pub(crate) fn append_data(&mut self, data: &[u8]) -> Result<(), AmqpConnectionError> {
+    fn append_data(&mut self, data: &[u8]) -> Result<(), AmqpConnectionError> {
         if !self.is_prepared() {
             return Err(AmqpConnectionError::ProtocolError("Content frame received without header first"));
         }
@@ -983,14 +989,14 @@ impl AmqpMessageBuilder {
         Ok(())
     }
 
-    pub(crate) fn is_prepared(&self) -> bool {
+    fn is_prepared(&self) -> bool {
         match self.mode {
             MessageDeliveryMode::None => false,
             _ => true,
         }
     }
 
-    pub(crate) fn is_complete(&self) -> bool {
+    fn is_complete(&self) -> bool {
         self.content.len() == self.size
     }
 }
@@ -1094,8 +1100,8 @@ mod tests {
             properties.message_id = Some("message id test".to_string());
             properties.priority = Some(2);
 
-            channel.set_on_return(Some(Box::new(|code, reason, exchange, routing_key| {
-                println!("Got return ({}, {}, {}, {})", code, reason, exchange, routing_key);
+            channel.set_on_return(Some(Box::new(|code, reason, exchange, routing_key, message| {
+                println!("Got return ({}, {}, {}, {}) - {:?}", code, reason, exchange, routing_key, message);
             })));
 
             let _ = channel.publish("".to_string(), "test-queue2".to_string(), properties, AmqpPublishFlags::new().mandatory(true), "test-data".as_bytes()).await;
