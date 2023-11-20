@@ -71,7 +71,7 @@ impl AmqpChannel {
 
         let frame = AmqpFrame {
             channel: self.ptr.number.get() as u16,
-            payload: AmqpFramePayload::Method(AmqpMethod::ChannelClose(0, "".to_string(), 0, 0)),
+            payload: AmqpFramePayload::Method(AmqpMethod::ChannelClose(0, "shutdown".to_string(), 0, 0)),
         };
 
         self.ptr.connection.writer_queue.send(Some(frame));
