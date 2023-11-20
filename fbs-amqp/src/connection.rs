@@ -380,24 +380,24 @@ impl AmqpChannelInternals {
         }
     }
 
-    fn handle_frame(&self, frame: AmqpFrame) -> Result<(), ()> {
+    fn handle_frame(&self, frame: AmqpFrame) -> Result<(), AmqpConnectionError> {
         match frame.payload {
             AmqpFramePayload::Header(class_id, size, properties) => {
-                self.message_in_flight.borrow_mut().prepare_from_header(size, properties);
+                self.message_in_flight.borrow_mut().prepare_from_header(size, properties)?;
                 Ok(())
             },
             AmqpFramePayload::Content(data) => {
-                self.message_in_flight.borrow_mut().append_data(&data);
+                self.message_in_flight.borrow_mut().append_data(&data)?;
                 Ok(())
             },
             AmqpFramePayload::Method(AmqpMethod::ChannelClose(code, reason, class, method)) => {
                 let error = AmqpConnectionError::ChannelClosedByServer(code, reason, class, method);
                 *self.last_error.borrow_mut() = Some(error.clone());
-                self.tx.send(Err(error));
-                Err(())
+                self.tx.send(Err(error.clone()));
+                Err(error)
             },
             AmqpFramePayload::Method(AmqpMethod::BasicReturn(code, reason, exchange, routing_key)) => {
-                self.message_in_flight.borrow_mut().prepare_mode(MessageDeliveryMode::Return(code, reason, exchange, routing_key));
+                self.message_in_flight.borrow_mut().prepare_mode(MessageDeliveryMode::Return(code, reason, exchange, routing_key))?;
                 // match &*self.on_return.borrow() {
                 //     None => (),
                 //     Some(callback) => callback(code, reason, exchange, routing_key),
@@ -720,19 +720,30 @@ impl AmqpConnectionInternal {
 
         let channel = channels.get_mut(index - 1);
         let mut close_channel = false;
-        match channel {
-            None => (),
+        let result = match channel {
+            None => Ok(()),
             Some(channel) => {
-                close_channel = channel.handle_frame(frame).is_err();
-            },
-        }
+                let result = channel.handle_frame(frame);
+                match result {
+                    Ok(_) => result,
+                    Err(AmqpConnectionError::ChannelClosedByServer(_, _, _, _)) => {
+                        close_channel = true;
+                        Ok(())
+                    },
+                    Err(_) => {
+                        close_channel = true;
+                        result
+                    },
+                }
+            }
+        };
 
         drop(channels);
         if close_channel {
             self.clear_channel(index);
         }
 
-        Ok(())
+        result
     }
 
     fn handle_connection_frame(&self, frame: AmqpFrame) -> Result<(), AmqpConnectionError> {
@@ -793,7 +804,7 @@ impl AmqpConnectionInternal {
         let mut reader = AmqpConnectionReader::new(self.fd.clone());
         let mut writer = AmqpConnectionWriter::new(self.fd.clone());
 
-        let frame = reader.read_frame().await?;
+        let _ = reader.read_frame().await?;
 
         let mut sasl = String::new();
         sasl.push('\x00');
@@ -845,13 +856,13 @@ impl AmqpConnectionInternal {
         writer.enqueue_frame(response);
         writer.flush_all().await?;
 
-        let frame = reader.read_frame().await?;
+        let _ = reader.read_frame().await?;
 
         self.start_io_handler(writer, self.writer_queue.rx(), reader, self_ptr);
         Ok(())
     }
 
-    fn start_io_handler(&self, mut writer: AmqpConnectionWriter, mut writer_channel: AsyncChannelRx<Option<AmqpFrame>>, mut reader: AmqpConnectionReader, connection: Rc<AmqpConnectionInternal>) {
+    fn start_io_handler(&self, mut writer: AmqpConnectionWriter, writer_channel: AsyncChannelRx<Option<AmqpFrame>>, mut reader: AmqpConnectionReader, connection: Rc<AmqpConnectionInternal>) {
 
         self.read_handler.set(async_spawn(async move {
             while connection.last_error.borrow().is_none() {
@@ -859,23 +870,31 @@ impl AmqpConnectionInternal {
                 match frame {
                     Ok(frame) => {
                         dbg!(&frame);
-                        if frame.channel > 0 {
-                            connection.handle_channel_frame(frame);
+                        let handle_result = if frame.channel > 0 {
+                            connection.handle_channel_frame(frame)
                         } else {
-                            connection.handle_connection_frame(frame);
+                            connection.handle_connection_frame(frame)
+                        };
+
+                        match handle_result {
+                            Ok(_) => (),
+                            Err(error) => {
+                                connection.mark_connection_closed(error, true);
+                                break;
+                            },
                         }
                     },
                     Err(error) => {
                         eprintln!("Connection closed unexpectedly: {}", error);
-                        connection.mark_connection_closed(error);
-
-                        // It is possible that we're waiting for connection.close-ok, so signaling
-                        // is needed to avoid deadlock
-                        connection.signal.signal();
+                        connection.mark_connection_closed(error, false);
                         break;
                     },
                 }
             }
+
+            // It is possible that we're waiting for connection.close-ok, so signaling
+            // is needed to avoid deadlock
+            connection.signal.signal();
         }));
 
         self.write_handler.set(async_spawn(async move {
