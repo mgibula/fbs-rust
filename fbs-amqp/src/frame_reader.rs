@@ -192,6 +192,14 @@ impl<'buffer> AmqpFrameReader<'buffer> {
                 let routing_key = self.read_short_string()?;
                 Ok(AmqpMethod::BasicReturn(code, reply_text, exchange, routing_key))
             },
+            (AMQP_CLASS_BASIC, AMQP_METHOD_BASIC_DELIVER) => {
+                let consumer_tag = self.read_short_string()?;
+                let delivery_tag = self.read_u64()?;
+                let redelivered = self.read_u8()?;
+                let exchange = self.read_short_string()?;
+                let routing_key = self.read_short_string()?;
+                Ok(AmqpMethod::BasicDeliver(consumer_tag, delivery_tag, redelivered != 0, exchange, routing_key))
+            },
             (_, _) => Err(AmqpFrameError::InvalidClassMethod(class_id, method_id))
         }
     }

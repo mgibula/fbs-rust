@@ -92,6 +92,7 @@ pub enum AmqpMethod {
     BasicCancelOk(String),                                                          // tag
     BasicPublish(String, String, u8),                                               // exchange, routing-key, flags
     BasicReturn(i16, String, String, String),                                       // return-code, reply-text, exchange, routing-key
+    BasicDeliver(String, u64, bool, String, String),                                // consumer-tag, delivery-tag, redelivered, exchange, routing-key
 }
 
 #[derive(Debug, Clone)]
