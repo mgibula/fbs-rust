@@ -11,12 +11,11 @@ use fbs_runtime::{async_connect, async_write, async_read_into, async_spawn};
 use fbs_runtime::resolver::{resolve_address, ResolveAddressError};
 use fbs_executor::TaskHandle;
 
+use super::{AmqpDeleteExchangeFlags, AmqpExchangeFlags, AmqpQueueFlags, AmqpDeleteQueueFlags, AmqpConsumeFlags, AmqpPublishFlags};
 use super::defines::AMQP_CLASS_BASIC;
-
-use super::frame::{AmqpProtocolHeader, AmqpFrame, AmqpFrameError, AmqpFramePayload, AmqpMethod, AmqpBasicProperties};
+use super::frame::{AmqpProtocolHeader, AmqpFrame, AmqpFrameError, AmqpFramePayload, AmqpMethod, AmqpBasicProperties, AmqpMessage};
 use super::frame_reader::AmqpFrameReader;
 use super::frame_writer::FrameWriter;
-use super::{AmqpDeleteExchangeFlags, AmqpExchangeFlags, AmqpQueueFlags, AmqpDeleteQueueFlags, AmqpConsumeFlags, AmqpPublishFlags};
 
 use thiserror::Error;
 
@@ -38,13 +37,13 @@ pub enum AmqpConnectionError {
     FrameTypeUnknown(u8),
     #[error("Invalid frame end")]
     FrameEndInvalid,
-    #[error("Frame error")]
+    #[error("Frame error: {0}")]
     FrameError(#[from] AmqpFrameError),
-    #[error("Connection closed by server")]
+    #[error("Connection closed by server - {1}")]
     ConnectionClosedByServer(u16, String, u16, u16),
     #[error("Protocol error")]
-    ProtocolError(AmqpFrame),
-    #[error("Channel closed by server")]
+    ProtocolError(&'static str),
+    #[error("Channel closed by server - {1}")]
     ChannelClosedByServer(u16, String, u16, u16),
 }
 
@@ -61,6 +60,10 @@ pub struct AmqpChannel {
 impl AmqpChannel {
     fn new(connection: Rc<AmqpConnectionInternal>) -> Self {
         Self { ptr: Rc::new(AmqpChannelInternals::new(connection)) }
+    }
+
+    pub fn set_on_return(&mut self, callback: Option<Box<dyn Fn(i16, String, String, String)>>) {
+        *self.ptr.on_return.borrow_mut() = callback;
     }
 
     pub async fn close(self) -> Result<(), AmqpConnectionError> {
@@ -146,7 +149,7 @@ impl AmqpChannel {
             let frame = self.ptr.rx.receive().await?;
             match frame.payload {
                 AmqpFramePayload::Method(AmqpMethod::QueueDeclareOk(name, messages, consumers)) => Ok((name, messages, consumers)),
-                _ => Err(AmqpConnectionError::ProtocolError(frame)),
+                _ => Err(AmqpConnectionError::ProtocolError("queue.declare-ok frame expected")),
             }
         } else {
             Ok((String::new(), 0, 0))
@@ -201,7 +204,7 @@ impl AmqpChannel {
             let frame = self.ptr.rx.receive().await?;
             match frame.payload {
                 AmqpFramePayload::Method(AmqpMethod::QueuePurgeOk(messages)) => Ok(messages),
-                _ => Err(AmqpConnectionError::ProtocolError(frame)),
+                _ => Err(AmqpConnectionError::ProtocolError("queue.purge-ok frame expected")),
             }
         } else {
             Ok(0)
@@ -223,7 +226,7 @@ impl AmqpChannel {
             let frame = self.ptr.rx.receive().await?;
             match frame.payload {
                 AmqpFramePayload::Method(AmqpMethod::QueueDeleteOk(messages)) => Ok(messages),
-                _ => Err(AmqpConnectionError::ProtocolError(frame)),
+                _ => Err(AmqpConnectionError::ProtocolError("queue.delete-ok frame expected")),
             }
         } else {
             Ok(0)
@@ -260,7 +263,7 @@ impl AmqpChannel {
             let frame = self.ptr.rx.receive().await?;
             match frame.payload {
                 AmqpFramePayload::Method(AmqpMethod::BasicConsumeOk(tag)) => Ok(tag),
-                _ => Err(AmqpConnectionError::ProtocolError(frame)),
+                _ => Err(AmqpConnectionError::ProtocolError("basic.consume-ok frame expected")),
             }
         } else {
             Ok(String::new())
@@ -282,7 +285,7 @@ impl AmqpChannel {
             let frame = self.ptr.rx.receive().await?;
             match frame.payload {
                 AmqpFramePayload::Method(AmqpMethod::BasicCancelOk(tag)) => Ok(tag),
-                _ => Err(AmqpConnectionError::ProtocolError(frame)),
+                _ => Err(AmqpConnectionError::ProtocolError("basic.cancel-ok frame expected")),
             }
         } else {
             Ok(String::new())
@@ -332,6 +335,8 @@ struct AmqpChannelInternals {
     number: Cell<usize>,
     active: Cell<bool>,
     last_error: RefCell<Option<AmqpConnectionError>>,
+    on_return: RefCell<Option<Box<dyn Fn(i16, String, String, String)>>>,
+    message_in_flight: RefCell<AmqpMessageBuilder>,
 }
 
 #[derive(Debug, Default)]
@@ -362,6 +367,8 @@ impl AmqpChannelInternals {
             rx,
             tx,
             last_error: RefCell::new(None),
+            on_return: RefCell::new(None),
+            message_in_flight: RefCell::new(AmqpMessageBuilder::default()),
         }
     }
 
@@ -375,11 +382,27 @@ impl AmqpChannelInternals {
 
     fn handle_frame(&self, frame: AmqpFrame) -> Result<(), ()> {
         match frame.payload {
+            AmqpFramePayload::Header(class_id, size, properties) => {
+                self.message_in_flight.borrow_mut().prepare_from_header(size, properties);
+                Ok(())
+            },
+            AmqpFramePayload::Content(data) => {
+                self.message_in_flight.borrow_mut().append_data(&data);
+                Ok(())
+            },
             AmqpFramePayload::Method(AmqpMethod::ChannelClose(code, reason, class, method)) => {
                 let error = AmqpConnectionError::ChannelClosedByServer(code, reason, class, method);
                 *self.last_error.borrow_mut() = Some(error.clone());
                 self.tx.send(Err(error));
                 Err(())
+            },
+            AmqpFramePayload::Method(AmqpMethod::BasicReturn(code, reason, exchange, routing_key)) => {
+                self.message_in_flight.borrow_mut().prepare_mode(MessageDeliveryMode::Return(code, reason, exchange, routing_key));
+                // match &*self.on_return.borrow() {
+                //     None => (),
+                //     Some(callback) => callback(code, reason, exchange, routing_key),
+                // };
+                Ok(())
             },
             AmqpFramePayload::Method(AmqpMethod::ChannelCloseOk()) if self.wait_list.channel_close_ok.get() => {
                 self.wait_list.channel_close_ok.set(false);
@@ -691,7 +714,7 @@ impl AmqpConnectionInternal {
         self.channels.borrow_mut().remove(index - 1);
     }
 
-    fn handle_channel_frame(&self, frame: AmqpFrame) {
+    fn handle_channel_frame(&self, frame: AmqpFrame) -> Result<(), AmqpConnectionError> {
         let index = frame.channel as usize;
         let mut channels = self.channels.borrow_mut();
 
@@ -708,9 +731,11 @@ impl AmqpConnectionInternal {
         if close_channel {
             self.clear_channel(index);
         }
+
+        Ok(())
     }
 
-    fn handle_connection_frame(&self, frame: AmqpFrame) {
+    fn handle_connection_frame(&self, frame: AmqpFrame) -> Result<(), AmqpConnectionError> {
         match frame.payload {
             AmqpFramePayload::Method(AmqpMethod::ConnectionClose(code, reason, class, method)) => {
                 self.mark_connection_closed(AmqpConnectionError::ConnectionClosedByServer(code, reason, class, method));
@@ -722,13 +747,14 @@ impl AmqpConnectionInternal {
             },
             _ => (),
         }
+
+        Ok(())
     }
 
     fn mark_connection_closed(&self, error: AmqpConnectionError) {
         if self.last_error.borrow().is_none() {
             *self.last_error.borrow_mut() = Some(error.clone());
             self.writer_queue.send(None);
-            let _ = self.fd.shutdown(true, true);
 
             let channels = self.channels.borrow();
             channels.iter().for_each(|channel| {
@@ -830,7 +856,7 @@ impl AmqpConnectionInternal {
                         }
                     },
                     Err(error) => {
-                        eprintln!("Connection closed unexpectedly");
+                        eprintln!("Connection closed unexpectedly: {}", error);
                         connection.mark_connection_closed(error);
 
                         // It is possible that we're waiting for connection.close-ok, so signaling
@@ -860,10 +886,83 @@ impl AmqpConnectionInternal {
                             break;
                         }
                     },
-                    None => break,
+                    None => {
+                        let _ = writer.fd.shutdown(true, true);
+                        break;
+                    }
                 }
             }
         }));
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+enum MessageDeliveryMode {
+    #[default] None,
+    Return(i16, String, String, String),
+}
+
+#[derive(Debug, Default, Clone)]
+struct AmqpMessageBuilder {
+    mode: MessageDeliveryMode,
+    size: usize,
+    properties: AmqpBasicProperties,
+    content: Vec<u8>,
+}
+
+impl AmqpMessageBuilder {
+    pub(crate) fn build(&mut self) -> Result<Option<AmqpMessage>, AmqpConnectionError> {
+        if !self.is_prepared() {
+            return Ok(None);
+        }
+
+        let result = if self.is_complete() {
+            Ok(Some(AmqpMessage { properties: std::mem::take(&mut self.properties), content: std::mem::take(&mut self.content) }))
+        } else {
+            eprintln!("Discarding incomplete frame");
+            Ok(None)
+        };
+
+        self.mode = MessageDeliveryMode::None;
+        self.size = 0;
+
+        result
+    }
+
+    fn prepare_mode(&mut self, mode: MessageDeliveryMode) -> Result<(), AmqpConnectionError> {
+        self.mode = mode;
+        Ok(())
+    }
+
+    pub fn prepare_from_header(&mut self, size: u64, properties: AmqpBasicProperties) -> Result<(), AmqpConnectionError> {
+        if self.is_prepared() {
+            return Err(AmqpConnectionError::ProtocolError("Extraneous header frame received"));
+        }
+
+        self.properties = properties;
+        self.size = size as usize;
+        self.content = Vec::with_capacity(size as usize);
+        Ok(())
+    }
+
+    pub(crate) fn append_data(&mut self, data: &[u8]) -> Result<(), AmqpConnectionError> {
+        if !self.is_prepared() {
+            return Err(AmqpConnectionError::ProtocolError("Content frame received without header first"));
+        }
+
+        self.content.extend_from_slice(data);
+        Ok(())
+    }
+
+    pub(crate) fn is_prepared(&self) -> bool {
+        match self.mode {
+            MessageDeliveryMode::None => false,
+            _ => true,
+        }
+    }
+
+    pub(crate) fn is_complete(&self) -> bool {
+        self.content.len() == self.size
     }
 }
 
@@ -940,15 +1039,13 @@ mod tests {
     fn publish_test() {
         async_run(async {
             let mut amqp = AmqpConnection::new("localhost".to_string());
-            let result = amqp.connect("guest", "guest").await;
-            dbg!(result);
+            let _ = amqp.connect("guest", "guest").await;
 
             let mut channel = amqp.channel_open().await.unwrap();
             println!("Got channel opened!");
 
-            let flow = channel.flow(true).await;
+            let _ = channel.flow(true).await;
             println!("After flow!");
-            dbg!(flow);
 
             let _ = channel.declare_exchange("test-exchange".to_string(), "direct".to_string(), AmqpExchangeFlags::new()).await;
             println!("After declare exchange!");
@@ -968,9 +1065,13 @@ mod tests {
             properties.message_id = Some("message id test".to_string());
             properties.priority = Some(2);
 
-            let _ = channel.publish("".to_string(), "test-queue".to_string(), properties, AmqpPublishFlags::new(), "test-data".as_bytes()).await;
+            channel.set_on_return(Some(Box::new(|code, reason, exchange, routing_key| {
+                println!("Got return ({}, {}, {}, {})", code, reason, exchange, routing_key);
+            })));
 
-            async_sleep(Duration::new(2, 0));
+            let _ = channel.publish("".to_string(), "test-queue2".to_string(), properties, AmqpPublishFlags::new().mandatory(true), "test-data".as_bytes()).await;
+
+            async_sleep(Duration::new(2, 0)).await;
 
             let r2 = channel.close().await;
             dbg!(r2);

@@ -32,37 +32,26 @@ pub enum AmqpFramePayload {
 
 #[derive(Debug, Default, Clone)]
 pub struct AmqpBasicProperties {
-    pub content_type: Option<String>,
-    pub content_encoding: Option<String>,
-    pub headers: Option<HashMap<String, AmqpData>>,
-    pub delivery_mode: Option<u8>,
-    pub priority: Option<u8>,
-    pub correlation_id: Option<String>,
-    pub reply_to: Option<String>,
-    pub expiration: Option<String>,
-    pub message_id: Option<String>,
-    pub timestamp: Option<u64>,
-    pub message_type: Option<String>,
-    pub user_id: Option<String>,
-    pub app_id: Option<String>,
-    pub cluster_id: Option<String>,
+    pub content_type: Option<String>,                   // bit 15
+    pub content_encoding: Option<String>,               // bit 14
+    pub headers: Option<HashMap<String, AmqpData>>,     // bit 13
+    pub delivery_mode: Option<u8>,                      // bit 12
+    pub priority: Option<u8>,                           // bit 11
+    pub correlation_id: Option<String>,                 // bit 10
+    pub reply_to: Option<String>,                       // bit 9
+    pub expiration: Option<String>,                     // bit 8
+    pub message_id: Option<String>,                     // bit 7
+    pub timestamp: Option<u64>,                         // bit 6
+    pub message_type: Option<String>,                   // bit 5
+    pub user_id: Option<String>,                        // bit 4
+    pub app_id: Option<String>,                         // bit 3
+    pub cluster_id: Option<String>,                     // bit 2
 }
 
-pub enum AmqpBasicProperty {
-    ContentType(String),                    // bit 15
-    ContentEncoding(String),                // bit 14
-    Headers(HashMap<String, AmqpData>),     // bit 13
-    DeliveryMode(bool),                     // bit 12
-    Priority(u8),                           // bit 11
-    CorrelationId(String),                  // bit 10
-    ReplyTo(String),                        // bit 9
-    Expiration(String),                     // bit 8
-    MessageId(String),                      // bit 7
-    Timestamp(u64),                         // bit 6
-    Type(String),                           // bit 5
-    UserId(String),                         // bit 4
-    AppId(String),                          // bit 3
-    ClusterId(String),                      // bit 2
+#[derive(Debug, Default, Clone)]
+pub struct AmqpMessage {
+    pub properties: AmqpBasicProperties,
+    pub content: Vec<u8>,
 }
 
 #[derive(Debug, Clone)]
@@ -102,6 +91,7 @@ pub enum AmqpMethod {
     BasicCancel(String, u8),                                                        // tag, no-wait
     BasicCancelOk(String),                                                          // tag
     BasicPublish(String, String, u8),                                               // exchange, routing-key, flags
+    BasicReturn(i16, String, String, String),                                       // return-code, reply-text, exchange, routing-key
 }
 
 #[derive(Debug, Clone)]
@@ -135,12 +125,12 @@ pub enum AmqpData {
 pub enum AmqpFrameError {
     #[error("Buffer too short")]
     BufferTooShort,
-    #[error("Invalid frame type")]
+    #[error("Invalid frame type - {0}")]
     InvalidFrameType(u8),
-    #[error("Invalid class/method")]
+    #[error("Invalid class/method - {0}/{1}")]
     InvalidClassMethod(u16, u16),
     #[error("Invalid string utf-8 format")]
     InvalidStringFormat(#[from] FromUtf8Error),
-    #[error("Invalid field type")]
+    #[error("Invalid field type - {0}")]
     InvalidFieldType(u8),
 }

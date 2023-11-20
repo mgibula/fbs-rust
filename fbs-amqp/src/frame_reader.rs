@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use super::frame::{AmqpFrameError, AmqpFrame, AmqpFramePayload, AmqpMethod, AmqpData};
+use super::frame::{AmqpFrameError, AmqpFrame, AmqpFramePayload, AmqpMethod, AmqpData, AmqpBasicProperties};
 use super::defines::*;
 
 pub struct AmqpFrameReader<'buffer> {
@@ -15,8 +15,80 @@ impl<'buffer> AmqpFrameReader<'buffer> {
     pub fn read_frame(&mut self, frame_type: u8, channel: u16) -> Result<AmqpFrame, AmqpFrameError> {
         match frame_type {
             AMQP_FRAME_TYPE_METHOD => Ok(AmqpFrame { channel, payload: AmqpFramePayload::Method(self.read_method_frame()?) }),
+            AMQP_FRAME_TYPE_HEADER => Ok(AmqpFrame { channel, payload: self.read_header_frame()? }),
+            AMQP_FRAME_TYPE_CONTENT => Ok(AmqpFrame { channel, payload: self.read_header_frame()? }),
             _ => Err(AmqpFrameError::InvalidFrameType(frame_type)),
         }
+    }
+
+    fn read_content_frame(&mut self) -> Result<AmqpFramePayload, AmqpFrameError> {
+        Ok(AmqpFramePayload::Content((self.read_remaining_bytes())))
+    }
+
+    fn read_header_frame(&mut self) -> Result<AmqpFramePayload, AmqpFrameError> {
+        let class_id = self.read_u16()?;
+        let _ = self.read_u16()?;
+        let size = self.read_u64()?;
+        let properties_mask = self.read_u16()?;
+        let mut properties = AmqpBasicProperties::default();
+
+        if (properties_mask & (1 << AMQP_BASIC_PROPERTY_CONTENT_TYPE_BIT)) != 0 {
+            properties.content_type = Some(self.read_short_string()?);
+        }
+
+        if (properties_mask & (1 << AMQP_BASIC_PROPERTY_CONTENT_ENCODING_BIT)) != 0 {
+            properties.content_encoding = Some(self.read_short_string()?);
+        }
+
+        if (properties_mask & (1 << AMQP_BASIC_PROPERTY_HEADERS_BIT)) != 0 {
+            properties.headers = Some(self.read_table()?);
+        }
+
+        if (properties_mask & (1 << AMQP_BASIC_PROPERTY_DELIVERY_MNODE_BIT)) != 0 {
+            properties.delivery_mode = Some(self.read_u8()?);
+        }
+
+        if (properties_mask & (1 << AMQP_BASIC_PROPERTY_PRIORITY_BIT)) != 0 {
+            properties.priority = Some(self.read_u8()?);
+        }
+
+        if (properties_mask & (1 << AMQP_BASIC_PROPERTY_CORRELATION_ID_BIT)) != 0 {
+            properties.correlation_id = Some(self.read_short_string()?);
+        }
+
+        if (properties_mask & (1 << AMQP_BASIC_PROPERTY_REPLY_TO_BIT)) != 0 {
+            properties.reply_to = Some(self.read_short_string()?);
+        }
+
+        if (properties_mask & (1 << AMQP_BASIC_PROPERTY_EXPIRATION_BIT)) != 0 {
+            properties.expiration = Some(self.read_short_string()?);
+        }
+
+        if (properties_mask & (1 << AMQP_BASIC_PROPERTY_MESSAGE_ID_BIT)) != 0 {
+            properties.message_id = Some(self.read_short_string()?);
+        }
+
+        if (properties_mask & (1 << AMQP_BASIC_PROPERTY_TIMESTAMP_BIT)) != 0 {
+            properties.timestamp = Some(self.read_u64()?);
+        }
+
+        if (properties_mask & (1 << AMQP_BASIC_PROPERTY_TYPE_BIT)) != 0 {
+            properties.message_type = Some(self.read_short_string()?);
+        }
+
+        if (properties_mask & (1 << AMQP_BASIC_PROPERTY_USER_ID_BIT)) != 0 {
+            properties.user_id = Some(self.read_short_string()?);
+        }
+
+        if (properties_mask & (1 << AMQP_BASIC_PROPERTY_APP_ID_BIT)) != 0 {
+            properties.app_id = Some(self.read_short_string()?);
+        }
+
+        if (properties_mask & (1 << AMQP_BASIC_PROPERTY_CLUSTER_ID_BIT)) != 0 {
+            properties.cluster_id = Some(self.read_short_string()?);
+        }
+
+        Ok(AmqpFramePayload::Header(class_id, size, properties))
     }
 
     fn read_method_frame(&mut self) -> Result<AmqpMethod, AmqpFrameError> {
@@ -112,6 +184,13 @@ impl<'buffer> AmqpFrameReader<'buffer> {
             (AMQP_CLASS_BASIC, AMQP_METHOD_BASIC_CANCEL_OK) => {
                 let tag = self.read_short_string()?;
                 Ok(AmqpMethod::BasicCancelOk(tag))
+            },
+            (AMQP_CLASS_BASIC, AMQP_METHOD_BASIC_RETURN) => {
+                let code = self.read_i16()?;
+                let reply_text = self.read_short_string()?;
+                let exchange = self.read_short_string()?;
+                let routing_key = self.read_short_string()?;
+                Ok(AmqpMethod::BasicReturn(code, reply_text, exchange, routing_key))
             },
             (_, _) => Err(AmqpFrameError::InvalidClassMethod(class_id, method_id))
         }
@@ -247,6 +326,13 @@ impl<'buffer> AmqpFrameReader<'buffer> {
         self.data = &self.data[length..];
 
         Ok(())
+    }
+
+    fn read_remaining_bytes(&mut self) -> Vec<u8> {
+        let result = self.data.to_vec();
+        self.data = &self.data[0..0];
+
+        result
     }
 
     fn read_short_string(&mut self) -> Result<String, AmqpFrameError> {
