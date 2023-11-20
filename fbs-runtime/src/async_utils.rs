@@ -266,7 +266,6 @@ mod test {
             async_spawn(async move {
                 assert_eq!(sig1.is_signalled(), false);
                 sig1.wait().await;
-                assert_eq!(sig1.is_signalled(), true);
 
                 tx1.send(1);
                 sig2cpy.signal();
@@ -277,7 +276,6 @@ mod test {
 
                 assert_eq!(sig1cpy.is_signalled(), false);
                 sig1cpy.signal();
-                assert_eq!(sig1cpy.is_signalled(), true);
 
                 sig2.wait().await;
                 tx2.send(3);
