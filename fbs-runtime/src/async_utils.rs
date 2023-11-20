@@ -82,6 +82,10 @@ impl<T> AsyncChannelTx<T> {
         self.backend.send(value)
     }
 
+    pub fn clear(&self) {
+        self.backend.clear()
+    }
+
     pub fn rx(&self) -> AsyncChannelRx<T> {
         AsyncChannelRx {
             backend: self.backend.clone()
@@ -112,6 +116,10 @@ impl<T> AsyncChannelBackend<T> {
         if let Some(waker) = waiter {
             waker.wake();
         }
+    }
+
+    fn clear(&self) {
+        self.messages.borrow_mut().clear()
     }
 }
 

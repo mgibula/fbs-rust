@@ -532,7 +532,7 @@ impl AmqpConnection {
 
 impl Drop for AmqpConnection {
     fn drop(&mut self) {
-        self.ptr.mark_connection_closed(AmqpConnectionError::ConnectionClosed);
+        self.ptr.mark_connection_closed(AmqpConnectionError::ConnectionClosed, false);
     }
 }
 
@@ -738,11 +738,11 @@ impl AmqpConnectionInternal {
     fn handle_connection_frame(&self, frame: AmqpFrame) -> Result<(), AmqpConnectionError> {
         match frame.payload {
             AmqpFramePayload::Method(AmqpMethod::ConnectionClose(code, reason, class, method)) => {
-                self.mark_connection_closed(AmqpConnectionError::ConnectionClosedByServer(code, reason, class, method));
+                self.mark_connection_closed(AmqpConnectionError::ConnectionClosedByServer(code, reason, class, method), false);
                 self.signal.signal();
             },
             AmqpFramePayload::Method(AmqpMethod::ConnectionCloseOk()) => {
-                self.mark_connection_closed(AmqpConnectionError::ConnectionClosed);
+                self.mark_connection_closed(AmqpConnectionError::ConnectionClosed, false);
                 self.signal.signal();
             },
             _ => (),
@@ -751,9 +751,19 @@ impl AmqpConnectionInternal {
         Ok(())
     }
 
-    fn mark_connection_closed(&self, error: AmqpConnectionError) {
+    fn mark_connection_closed(&self, error: AmqpConnectionError, send_close_frame: bool) {
         if self.last_error.borrow().is_none() {
             *self.last_error.borrow_mut() = Some(error.clone());
+            if send_close_frame {
+                let close_frame = AmqpFrame { 
+                    channel: 0,
+                    payload: AmqpFramePayload::Method(AmqpMethod::ConnectionClose(400, "protocol-error".to_string(), 0, 0)),
+                };
+
+                self.writer_queue.clear();
+                self.writer_queue.send(Some(close_frame));
+            }
+
             self.writer_queue.send(None);
 
             let channels = self.channels.borrow();
