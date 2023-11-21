@@ -309,7 +309,7 @@ impl AmqpChannel {
         }
     }
 
-    pub async fn publish(&mut self, exchange: String, routing_key: String, properties: AmqpBasicProperties, flags: AmqpPublishFlags, mut content: &[u8]) -> Result<(), AmqpConnectionError> {
+    pub fn publish(&self, exchange: String, routing_key: String, properties: AmqpBasicProperties, flags: AmqpPublishFlags, mut content: &[u8]) -> Result<(), AmqpConnectionError> {
         self.ptr.is_channel_valid()?;
 
         let frame = AmqpFrame {
@@ -341,6 +341,10 @@ impl AmqpChannel {
         }
 
         Ok(())
+    }
+
+    pub fn ack(&self, delivery_tag: u64, multiple: bool) {
+        self.ptr.ack(delivery_tag, multiple)
     }
 }
 
@@ -389,6 +393,15 @@ impl AmqpChannelInternals {
             message_in_flight: RefCell::new(AmqpMessageBuilder::default()),
             consumers: RefCell::new(HashMap::new()),
         }
+    }
+
+    fn ack(&self, delivery_tag: u64, multiple: bool) {
+        let frame = AmqpFrame {
+            channel: self.number.get() as u16,
+            payload: AmqpFramePayload::Method(AmqpMethod::BasicAck(delivery_tag, multiple)),
+        };
+
+        self.connection.writer_queue.send(Some(frame));
     }
 
     fn is_channel_valid(&self) -> Result<(), AmqpConnectionError> {
@@ -1144,7 +1157,7 @@ mod tests {
             let tag = channel.consume("test-queue".to_string(), String::new(), consume, AmqpConsumeFlags::new()).await.unwrap();
             println!("After basic consume!");
 
-            let _ = channel.publish("".to_string(), "test-queue".to_string(), properties, AmqpPublishFlags::new().mandatory(true), "test-data".as_bytes()).await;
+            let _ = channel.publish("".to_string(), "test-queue".to_string(), properties, AmqpPublishFlags::new().mandatory(true), "test-data".as_bytes());
 
             async_sleep(Duration::new(2, 0)).await;
 

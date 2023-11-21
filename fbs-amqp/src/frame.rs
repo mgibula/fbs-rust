@@ -93,6 +93,7 @@ pub enum AmqpMethod {
     BasicPublish(String, String, u8),                                               // exchange, routing-key, flags
     BasicReturn(i16, String, String, String),                                       // return-code, reply-text, exchange, routing-key
     BasicDeliver(String, u64, bool, String, String),                                // consumer-tag, delivery-tag, redelivered, exchange, routing-key
+    BasicAck(u64, bool),                                                            // delivery-tag, multiple
 }
 
 #[derive(Debug, Clone)]
