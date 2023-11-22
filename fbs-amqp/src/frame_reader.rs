@@ -215,6 +215,21 @@ impl<'buffer> AmqpFrameReader<'buffer> {
             (AMQP_CLASS_BASIC, AMQP_METHOD_BASIC_RECOVER_OK) => {
                 Ok(AmqpMethod::BasicRecoverOk())
             },
+            (AMQP_CLASS_BASIC, AMQP_METHOD_BASIC_ACK) => {
+                let delivery_tag = self.read_u64()?;
+                let multiple = self.read_u8()?;
+
+                Ok(AmqpMethod::BasicAck(delivery_tag, multiple != 0))
+            },
+            (AMQP_CLASS_BASIC, AMQP_METHOD_BASIC_NACK) => {
+                let delivery_tag = self.read_u64()?;
+                let flags = self.read_u8()?;
+
+                Ok(AmqpMethod::BasicNack(delivery_tag, flags))
+            },
+            (AMQP_CLASS_CONFIRM, AMQP_METHOD_CONFIRM_SELECT_OK) => {
+                Ok(AmqpMethod::ConfirmSelectOk())
+            },
             (_, _) => Err(AmqpFrameError::InvalidClassMethod(class_id, method_id))
         }
     }

@@ -345,6 +345,11 @@ impl FrameWriter {
                 write_u64(&mut result, *delivery_tag);
                 write_u8(&mut result, *flags);
             },
+            AmqpMethod::ConfirmSelect(no_wait) => {
+                write_u16(&mut result, AMQP_CLASS_CONFIRM);
+                write_u16(&mut result, AMQP_METHOD_CONFIRM_SELECT);
+                write_u8(&mut result, (*no_wait) as u8);
+            },
             _ => panic!("Attempting to write unsupported frame type"),
         }
 

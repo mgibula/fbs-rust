@@ -32,6 +32,7 @@ pub const AMQP_CLASS_CHANNEL: u16               = 20;
 pub const AMQP_CLASS_EXCHANGE: u16              = 40;
 pub const AMQP_CLASS_QUEUE: u16                 = 50;
 pub const AMQP_CLASS_BASIC: u16                 = 60;
+pub const AMQP_CLASS_CONFIRM: u16               = 85;
 pub const AMQP_CLASS_TX: u16                    = 90;
 
 #[derive(Debug, Clone, Copy)]
@@ -153,7 +154,10 @@ pub const AMQP_METHOD_BASIC_REJECT: u16         = 90;
 pub const AMQP_METHOD_BASIC_RECOVERY_ASYNC: u16 = 100;
 pub const AMQP_METHOD_BASIC_RECOVER: u16        = 110;
 pub const AMQP_METHOD_BASIC_RECOVER_OK: u16     = 111;
-pub const AMQP_METHOD_BASIC_NACK: u16     = 120;
+pub const AMQP_METHOD_BASIC_NACK: u16           = 120;
+
+pub const AMQP_METHOD_CONFIRM_SELECT: u16       = 10;
+pub const AMQP_METHOD_CONFIRM_SELECT_OK: u16    = 11;
 
 pub const AMQP_BASIC_PROPERTY_CONTENT_TYPE_BIT: u8      = 15;
 pub const AMQP_BASIC_PROPERTY_CONTENT_ENCODING_BIT: u8  = 14;
