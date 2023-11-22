@@ -21,7 +21,7 @@ use thiserror::Error;
 
 const FRAME_EXTRA_SIZE: u32 = 8;  // size of frame header and footer
 
-pub type AmqpConsumer = Box<dyn Fn(&AmqpChannelInternals, u64, bool, String, String, AmqpMessage)>;
+pub type AmqpConsumer = Box<dyn Fn(u64, bool, String, String, AmqpMessage)>;
 pub type AmqpConfirmAckCallback = Box<dyn Fn(u64, bool)>;
 pub type AmqpConfirmNackCallback = Box<dyn Fn(u64, AmqpNackFlags)>;
 
@@ -58,7 +58,6 @@ pub struct AmqpConnection {
     address: String,
 }
 
-#[derive(Clone)]
 pub struct AmqpChannel {
     ptr: Rc<AmqpChannelInternals>,
 }
@@ -66,6 +65,12 @@ pub struct AmqpChannel {
 impl AmqpChannel {
     fn new(connection: Rc<AmqpConnectionInternal>) -> Self {
         Self { ptr: Rc::new(AmqpChannelInternals::new(connection)) }
+    }
+
+    pub fn publisher(&self) -> AmqpChannelPublisher {
+        AmqpChannelPublisher { 
+            ptr: self.ptr.clone(),
+        }
     }
 
     pub fn set_on_return(&mut self, callback: Option<Box<dyn Fn(i16, String, String, String, AmqpMessage)>>) {
@@ -298,7 +303,7 @@ impl AmqpChannel {
             channel: self.ptr.number.get() as u16,
             payload: AmqpFramePayload::Method(AmqpMethod::ConfirmSelect(no_wait)),
         };
-        
+
         self.ptr.connection.writer_queue.send(Some(frame));
 
         if !no_wait {
@@ -375,38 +380,8 @@ impl AmqpChannel {
         }
     }
 
-    pub fn publish(&self, exchange: String, routing_key: String, properties: AmqpBasicProperties, flags: AmqpPublishFlags, mut content: &[u8]) -> Result<(), AmqpConnectionError> {
-        self.ptr.is_channel_valid()?;
-
-        let frame = AmqpFrame {
-            channel: self.ptr.number.get() as u16,
-            payload: AmqpFramePayload::Method(AmqpMethod::BasicPublish(exchange, routing_key, flags.into())),
-        };
-
-        self.ptr.connection.writer_queue.send(Some(frame));
-
-        let frame = AmqpFrame {
-            channel: self.ptr.number.get() as u16,
-            payload: AmqpFramePayload::Header(AMQP_CLASS_BASIC, content.len() as u64, properties),
-        };
-
-        self.ptr.connection.writer_queue.send(Some(frame));
-
-        let mut total_bytes_to_send = content.len();
-        while total_bytes_to_send > 0 {
-            let bytes_in_frame = min(total_bytes_to_send, self.ptr.connection.max_frame_size.get() as usize);
-
-            let frame = AmqpFrame {
-                channel: self.ptr.number.get() as u16,
-                payload: AmqpFramePayload::Content(content[..bytes_in_frame].to_vec()),
-            };
-
-            self.ptr.connection.writer_queue.send(Some(frame));
-            content = &content[bytes_in_frame..];
-            total_bytes_to_send -= bytes_in_frame;
-        }
-
-        Ok(())
+    pub fn publish(&self, exchange: String, routing_key: String, properties: AmqpBasicProperties, flags: AmqpPublishFlags, content: &[u8]) -> Result<(), AmqpConnectionError> {
+        self.ptr.publish(exchange, routing_key, properties, flags, content)
     }
 
     pub fn ack(&self, delivery_tag: u64, multiple: bool) {
@@ -422,9 +397,30 @@ impl AmqpChannel {
     }    
 }
 
-pub type AmqpChannelInterface = AmqpChannelInternals;
+#[derive(Clone)]
+pub struct AmqpChannelPublisher {
+    ptr: Rc<AmqpChannelInternals>,
+}
 
-pub struct AmqpChannelInternals {
+impl AmqpChannelPublisher {
+    pub fn ack(&self, delivery_tag: u64, multiple: bool) {
+        self.ptr.ack(delivery_tag, multiple)
+    }
+
+    pub fn reject(&self, delivery_tag: u64, requeue: bool) {
+        self.ptr.reject(delivery_tag, requeue)
+    }
+
+    pub fn nack(&self, delivery_tag: u64, flags: AmqpNackFlags) {
+        self.ptr.nack(delivery_tag, flags)
+    }
+
+    pub fn publish(&self, exchange: String, routing_key: String, properties: AmqpBasicProperties, flags: AmqpPublishFlags, content: &[u8]) -> Result<(), AmqpConnectionError> {
+        self.ptr.publish(exchange, routing_key, properties, flags, content)
+    }
+}
+
+struct AmqpChannelInternals {
     connection: Rc<AmqpConnectionInternal>,
     rx: AsyncChannelRx<Result<AmqpFrame, AmqpConnectionError>>,
     tx: AsyncChannelTx<Result<AmqpFrame, AmqpConnectionError>>,
@@ -482,6 +478,40 @@ impl AmqpChannelInternals {
             install_consumer: Cell::new(None),
             confirm_callbacks: RefCell::new(None),
         }
+    }
+
+    fn publish(&self, exchange: String, routing_key: String, properties: AmqpBasicProperties, flags: AmqpPublishFlags, mut content: &[u8]) -> Result<(), AmqpConnectionError> {
+        self.is_channel_valid()?;
+
+        let frame = AmqpFrame {
+            channel: self.number.get() as u16,
+            payload: AmqpFramePayload::Method(AmqpMethod::BasicPublish(exchange, routing_key, flags.into())),
+        };
+
+        self.connection.writer_queue.send(Some(frame));
+
+        let frame = AmqpFrame {
+            channel: self.number.get() as u16,
+            payload: AmqpFramePayload::Header(AMQP_CLASS_BASIC, content.len() as u64, properties),
+        };
+
+        self.connection.writer_queue.send(Some(frame));
+
+        let mut total_bytes_to_send = content.len();
+        while total_bytes_to_send > 0 {
+            let bytes_in_frame = min(total_bytes_to_send, self.connection.max_frame_size.get() as usize);
+
+            let frame = AmqpFrame {
+                channel: self.number.get() as u16,
+                payload: AmqpFramePayload::Content(content[..bytes_in_frame].to_vec()),
+            };
+
+            self.connection.writer_queue.send(Some(frame));
+            content = &content[bytes_in_frame..];
+            total_bytes_to_send -= bytes_in_frame;
+        }
+
+        Ok(())
     }
 
     fn ack(&self, delivery_tag: u64, multiple: bool) {
@@ -545,7 +575,7 @@ impl AmqpChannelInternals {
                         match consumer {
                             None => eprintln!("Received message with consumer tag {}, but no consumer installed", consumer_tag),
                             Some(callback) => {
-                                callback(self, delivery_tag, redelivered, exchange, routing_key, message);
+                                callback(delivery_tag, redelivered, exchange, routing_key, message);
                             },
                         }
                     },
@@ -1258,7 +1288,7 @@ mod tests {
             let _ = channel.qos(0, 1, false).await;
             println!("After basic qos!");
 
-            let tag = channel.consume("test-queue".to_string(), String::new(), Box::new(|_, _, _, _, _, _| { }), AmqpConsumeFlags::new()).await.unwrap();
+            let tag = channel.consume("test-queue".to_string(), String::new(), Box::new(|_, _, _, _, _| { }), AmqpConsumeFlags::new()).await.unwrap();
             println!("After basic consume!");
 
             let _ = channel.cancel(tag, false).await;
@@ -1316,7 +1346,7 @@ mod tests {
                 println!("Got return ({}, {}, {}, {}) - {:?}", code, reason, exchange, routing_key, message);
             })));
 
-            let consume = Box::new(|channel: &AmqpChannelInterface, tag, redelivered, exchange, routing_key, message| {
+            let consume = Box::new(|tag, redelivered, exchange, routing_key, message| {
                 println!("Got message ({}, {}, {}, {}) - {:?}", tag, redelivered, exchange, routing_key, message);
             });
 
