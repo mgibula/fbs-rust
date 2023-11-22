@@ -353,3 +353,9 @@ impl Into<u8> for AmqpNackFlags {
         self.flags
     }
 }
+
+impl From<u8> for AmqpNackFlags {
+    fn from(value: u8) -> Self {
+        Self { flags: value }
+    }
+}

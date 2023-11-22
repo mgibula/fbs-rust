@@ -22,6 +22,8 @@ use thiserror::Error;
 const FRAME_EXTRA_SIZE: u32 = 8;  // size of frame header and footer
 
 pub type AmqpConsumer = Box<dyn Fn(&AmqpChannelInternals, u64, bool, String, String, AmqpMessage)>;
+pub type AmqpConfirmAckCallback = Box<dyn Fn(u64, bool)>;
+pub type AmqpConfirmNackCallback = Box<dyn Fn(u64, AmqpNackFlags)>;
 
 #[derive(Error, Debug, Clone)]
 pub enum AmqpConnectionError {
@@ -288,6 +290,31 @@ impl AmqpChannel {
         }
     }
 
+    pub async fn confirm_select(&mut self, callbacks: (AmqpConfirmAckCallback, AmqpConfirmNackCallback), no_wait: bool) -> Result<(), AmqpConnectionError> {
+        self.ptr.is_channel_valid()?;
+        *self.ptr.confirm_callbacks.borrow_mut() = Some(callbacks);
+
+        let frame = AmqpFrame {
+            channel: self.ptr.number.get() as u16,
+            payload: AmqpFramePayload::Method(AmqpMethod::ConfirmSelect(no_wait)),
+        };
+        
+        self.ptr.connection.writer_queue.send(Some(frame));
+
+        if !no_wait {
+            self.ptr.wait_list.confirm_select_ok.set(true);
+            let frame = self.ptr.rx.receive().await?;
+            match frame.payload {
+                AmqpFramePayload::Method(AmqpMethod::ConfirmSelectOk()) => {
+                    Ok(())
+                },
+                _ => Err(AmqpConnectionError::ProtocolError("confirm.select-ok frame expected")),
+            }
+        } else {
+            Ok(())
+        }
+    }
+
     pub async fn consume(&mut self, queue: String, tag: String, callback: AmqpConsumer, flags: AmqpConsumeFlags) -> Result<String, AmqpConnectionError> {
         self.ptr.is_channel_valid()?;
 
@@ -411,6 +438,7 @@ pub struct AmqpChannelInternals {
     message_in_flight: RefCell<AmqpMessageBuilder>,
     consumers: RefCell<HashMap<String, AmqpConsumer>>,
     install_consumer: Cell<Option<AmqpConsumer>>,
+    confirm_callbacks: RefCell<Option<(AmqpConfirmAckCallback, AmqpConfirmNackCallback)>>,
 }
 
 #[derive(Debug, Default)]
@@ -430,6 +458,7 @@ struct FrameWaiter {
     basic_cancel_ok: Cell<bool>,
     basic_get: Cell<bool>,
     basic_recover_ok: Cell<bool>,
+    confirm_select_ok: Cell<bool>,
 }
 
 impl AmqpChannelInternals {
@@ -451,6 +480,7 @@ impl AmqpChannelInternals {
             message_in_flight: RefCell::new(AmqpMessageBuilder::default()),
             consumers: RefCell::new(HashMap::new()),
             install_consumer: Cell::new(None),
+            confirm_callbacks: RefCell::new(None),
         }
     }
 
@@ -638,8 +668,39 @@ impl AmqpChannelInternals {
                 self.wait_list.basic_get.set(false);
                 self.tx.send(Ok(frame));
                 Ok(())
-            },            
+            },
+            AmqpFramePayload::Method(AmqpMethod::ConfirmSelectOk()) if self.wait_list.confirm_select_ok.get() => {
+                self.wait_list.confirm_select_ok.set(false);
+                self.tx.send(Ok(frame));
+                Ok(())
+            },
+            AmqpFramePayload::Method(AmqpMethod::BasicAck(delivery_tag, multiple)) => {
+                self.on_ack(delivery_tag, multiple);
+                Ok(())
+            },
+            AmqpFramePayload::Method(AmqpMethod::BasicNack(delivery_tag, flags)) => {
+                self.on_nack(delivery_tag, flags.into());
+                Ok(())
+            },
             _ => Ok(()),
+        }
+    }
+
+    fn on_ack(&self, delivery_tag: u64, multiple: bool) {
+        match &*self.confirm_callbacks.borrow() {
+            None => eprintln!("Received basic.on-ack without confirm callbacks"),
+            Some((on_ack, _)) => {
+                on_ack(delivery_tag, multiple);
+            },
+        }
+    }
+
+    fn on_nack(&self, delivery_tag: u64, flags: AmqpNackFlags) {
+        match &*self.confirm_callbacks.borrow() {
+            None => eprintln!("Received basic.on-ack without confirm callbacks"),
+            Some((_, on_nack)) => {
+                on_nack(delivery_tag, flags);
+            },
         }
     }
 }
@@ -1276,7 +1337,6 @@ mod tests {
         });
     }
 
-
     #[test]
     fn no_sense_test() {
         async_run(async {
@@ -1311,4 +1371,37 @@ mod tests {
             println!("Got connection closed!");
         });
     }    
+
+    #[test]
+    fn confirm_test() {
+        async_run(async {
+            let mut amqp = AmqpConnection::new("localhost".to_string());
+            let _ = amqp.connect("guest", "guest").await;
+
+            let mut channel = amqp.channel_open().await.unwrap();
+            println!("Got channel opened!");
+
+            let on_ack = Box::new(|tag, multiple| {
+                println!("Got ack");
+            });
+
+            let on_nack = Box::new(|tag, flags| {
+                println!("Got nack");
+            });
+
+            channel.confirm_select((on_ack, on_nack), false).await;
+
+            let _ = channel.publish("".to_string(), "test-queue".to_string(), AmqpBasicProperties::default(), AmqpPublishFlags::new().mandatory(true), "test-data".as_bytes());
+
+            async_sleep(Duration::new(2, 0)).await;
+
+            let r2 = channel.close().await;
+            dbg!(r2);
+            println!("Got channel closed!");
+
+            amqp.close().await;
+            println!("Got connection closed!");
+        });
+    }    
+
 }
