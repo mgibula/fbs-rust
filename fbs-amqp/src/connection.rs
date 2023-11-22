@@ -21,6 +21,8 @@ use thiserror::Error;
 
 const FRAME_EXTRA_SIZE: u32 = 8;  // size of frame header and footer
 
+pub type AmqpConsumer = Box<dyn Fn(&AmqpChannelInternals, u64, bool, String, String, AmqpMessage)>;
+
 #[derive(Error, Debug, Clone)]
 pub enum AmqpConnectionError {
     #[error("AMQP address incorrect")]
@@ -250,32 +252,34 @@ impl AmqpChannel {
         Ok(())
     }
 
-    pub async fn consume(&mut self, queue: String, tag: String, callback: Box<dyn Fn(&AmqpChannelInternals, u64, bool, String, String, AmqpMessage)>, flags: AmqpConsumeFlags) -> Result<String, AmqpConnectionError> {
+    pub async fn consume(&mut self, queue: String, tag: String, callback: AmqpConsumer, flags: AmqpConsumeFlags) -> Result<String, AmqpConnectionError> {
         self.ptr.is_channel_valid()?;
 
-        // With no-wait tag must be set
+        // With no-wait with empty tag makes no sense, as with no reply it's not possible to know the consumer tag
         if tag.is_empty() && flags.has_no_wait() {
             return Err(AmqpConnectionError::InvalidParameters);
         }
 
         let frame = AmqpFrame {
             channel: self.ptr.number.get() as u16,
-            payload: AmqpFramePayload::Method(AmqpMethod::BasicConsume(queue, tag, flags.into(), HashMap::new())),
+            payload: AmqpFramePayload::Method(AmqpMethod::BasicConsume(queue, tag.clone(), flags.into(), HashMap::new())),
         };
-
+        
         self.ptr.connection.writer_queue.send(Some(frame));
 
         if !flags.has_no_wait() {
             self.ptr.wait_list.basic_consume_ok.set(true);
+            self.ptr.install_consumer.set(Some(callback));
             let frame = self.ptr.rx.receive().await?;
             match frame.payload {
                 AmqpFramePayload::Method(AmqpMethod::BasicConsumeOk(tag)) => {
-                    self.ptr.consumers.borrow_mut().insert(tag.clone(), callback);
                     Ok(tag)
                 },
                 _ => Err(AmqpConnectionError::ProtocolError("basic.consume-ok frame expected")),
             }
         } else {
+            self.ptr.consumers.borrow_mut().insert(tag, callback);
+            // self.ptr.install_consumer.set(Some(callback));
             Ok(String::new())
         }
     }
@@ -360,7 +364,8 @@ pub struct AmqpChannelInternals {
     last_error: RefCell<Option<AmqpConnectionError>>,
     on_return: RefCell<Option<Box<dyn Fn(i16, String, String, String, AmqpMessage)>>>,
     message_in_flight: RefCell<AmqpMessageBuilder>,
-    consumers: RefCell<HashMap<String, Box<dyn Fn(&AmqpChannelInterface, u64, bool, String, String, AmqpMessage)>>>,
+    consumers: RefCell<HashMap<String, AmqpConsumer>>,
+    install_consumer: Cell<Option<AmqpConsumer>>,
 }
 
 #[derive(Debug, Default)]
@@ -394,6 +399,7 @@ impl AmqpChannelInternals {
             on_return: RefCell::new(None),
             message_in_flight: RefCell::new(AmqpMessageBuilder::default()),
             consumers: RefCell::new(HashMap::new()),
+            install_consumer: Cell::new(None),
         }
     }
 
@@ -436,9 +442,9 @@ impl AmqpChannelInternals {
                     Some((MessageDeliveryMode::Deliver(consumer_tag, delivery_tag, redelivered, exchange, routing_key), message)) => {
                         let consumers = self.consumers.borrow();
                         let consumer = consumers.get(&consumer_tag);
-                        println!("GOT MESSAGE - {} - tag {}", consumer.is_some(), consumer_tag);
+                        
                         match consumer {
-                            None => (),
+                            None => eprintln!("Received message with consumer tag {}, but no consumer installed", consumer_tag),
                             Some(callback) => {
                                 callback(self, delivery_tag, redelivered, exchange, routing_key, message);
                             },
@@ -528,8 +534,15 @@ impl AmqpChannelInternals {
                 self.tx.send(Ok(frame));
                 Ok(())
             },
-            AmqpFramePayload::Method(AmqpMethod::BasicConsumeOk(_)) if self.wait_list.basic_consume_ok.get() => {
+            AmqpFramePayload::Method(AmqpMethod::BasicConsumeOk(ref tag)) if self.wait_list.basic_consume_ok.get() => {
                 self.wait_list.basic_consume_ok.set(true);
+                match self.install_consumer.take() {
+                    None => panic!("Received basic.consume-ok with no consumer callback pending"),
+                    Some(callback) => {
+                        self.consumers.borrow_mut().insert(tag.clone(), callback);
+                    }
+                };
+
                 self.tx.send(Ok(frame));
                 Ok(())
             },
@@ -1137,8 +1150,8 @@ mod tests {
             let _ = channel.declare_queue("test-queue".to_string(), AmqpQueueFlags::new().durable(true)).await;
             println!("After declare queue!");
 
-            let _ = channel.purge_queue("test-queue".to_string(), false).await;
-            println!("After queue purge!");
+            // let _ = channel.purge_queue("test-queue".to_string(), false).await;
+            // println!("After queue purge!");
 
             let mut properties = AmqpBasicProperties::default();
             properties.content_type = Some("text/plain".to_string());
@@ -1153,7 +1166,7 @@ mod tests {
                 println!("Got return ({}, {}, {}, {}) - {:?}", code, reason, exchange, routing_key, message);
             })));
 
-            let consume = Box::new(|tag, redelivered, exchange, routing_key, message| {
+            let consume = Box::new(|channel: &AmqpChannelInterface, tag, redelivered, exchange, routing_key, message| {
                 println!("Got message ({}, {}, {}, {}) - {:?}", tag, redelivered, exchange, routing_key, message);
             });
 
@@ -1172,4 +1185,32 @@ mod tests {
             println!("Got connection closed!");
         });
     }
+
+
+    #[test]
+    fn no_sense_test() {
+        async_run(async {
+            let mut amqp = AmqpConnection::new("localhost".to_string());
+            let _ = amqp.connect("guest", "guest").await;
+
+            let mut channel = amqp.channel_open().await.unwrap();
+            println!("Got channel opened!");
+
+            let consume = Box::new(|channel: &AmqpChannelInterface, tag, redelivered, exchange, routing_key, message| {
+                println!("Got message ({}, {}, {}, {}) - {:?}", tag, redelivered, exchange, routing_key, message);
+            });
+
+            let tag = channel.consume("test-queue".to_string(), String::new(), consume, AmqpConsumeFlags::new().no_wait(true)).await.unwrap();
+            println!("After basic consume!");
+
+            async_sleep(Duration::new(2, 0)).await;
+
+            let r2 = channel.close().await;
+            dbg!(r2);
+            println!("Got channel closed!");
+
+            amqp.close().await;
+            println!("Got connection closed!");
+        });
+    }    
 }
