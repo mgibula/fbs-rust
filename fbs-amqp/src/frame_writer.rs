@@ -334,6 +334,11 @@ impl FrameWriter {
                 write_u64(&mut result, *delivery_tag);
                 write_u8(&mut result, (*requeue) as u8);
             },
+            AmqpMethod::BasicRecover(requeue) => {
+                write_u16(&mut result, AMQP_CLASS_BASIC);
+                write_u16(&mut result, AMQP_METHOD_BASIC_RECOVER);
+                write_u8(&mut result, (*requeue) as u8);
+            },
             _ => panic!("Attempting to write unsupported frame type"),
         }
 

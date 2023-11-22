@@ -212,6 +212,9 @@ impl<'buffer> AmqpFrameReader<'buffer> {
                 let _ = self.read_short_string()?;
                 Ok(AmqpMethod::BasicGetEmpty())
             },
+            (AMQP_CLASS_BASIC, AMQP_METHOD_BASIC_RECOVER_OK) => {
+                Ok(AmqpMethod::BasicRecoverOk())
+            },
             (_, _) => Err(AmqpFrameError::InvalidClassMethod(class_id, method_id))
         }
     }

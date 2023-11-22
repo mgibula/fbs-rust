@@ -252,6 +252,21 @@ impl AmqpChannel {
         Ok(())
     }
 
+    pub async fn recover(&mut self, requeue: bool) -> Result<(), AmqpConnectionError> {
+        self.ptr.is_channel_valid()?;
+
+        let frame = AmqpFrame {
+            channel: self.ptr.number.get() as u16,
+            payload: AmqpFramePayload::Method(AmqpMethod::BasicRecover(requeue)),
+        };
+
+        self.ptr.connection.writer_queue.send(Some(frame));
+        self.ptr.wait_list.basic_recover_ok.set(true);
+        self.ptr.rx.receive().await?;
+
+        Ok(())
+    }
+
     pub async fn get(&mut self, queue: String, no_ack: bool) -> Result<Option<(u64, bool, String, String, u32, AmqpMessage)>, AmqpConnectionError> {
         self.ptr.is_channel_valid()?;
 
@@ -396,20 +411,21 @@ pub struct AmqpChannelInternals {
 
 #[derive(Debug, Default)]
 struct FrameWaiter {
-    pub channel_open_ok: Cell<bool>,
-    pub channel_close_ok: Cell<bool>,
-    pub channel_flow_ok: Cell<bool>,
-    pub exchange_declare_ok: Cell<bool>,
-    pub exchange_delete_ok: Cell<bool>,
-    pub queue_declare_ok: Cell<bool>,
-    pub queue_bind_ok: Cell<bool>,
-    pub queue_unbind_ok: Cell<bool>,
-    pub queue_purge_ok: Cell<bool>,
-    pub queue_delete_ok: Cell<bool>,
-    pub basic_qos_ok: Cell<bool>,
-    pub basic_consume_ok: Cell<bool>,
-    pub basic_cancel_ok: Cell<bool>,
-    pub basic_get: Cell<bool>,
+    channel_open_ok: Cell<bool>,
+    channel_close_ok: Cell<bool>,
+    channel_flow_ok: Cell<bool>,
+    exchange_declare_ok: Cell<bool>,
+    exchange_delete_ok: Cell<bool>,
+    queue_declare_ok: Cell<bool>,
+    queue_bind_ok: Cell<bool>,
+    queue_unbind_ok: Cell<bool>,
+    queue_purge_ok: Cell<bool>,
+    queue_delete_ok: Cell<bool>,
+    basic_qos_ok: Cell<bool>,
+    basic_consume_ok: Cell<bool>,
+    basic_cancel_ok: Cell<bool>,
+    basic_get: Cell<bool>,
+    basic_recover_ok: Cell<bool>,
 }
 
 impl AmqpChannelInternals {
@@ -577,6 +593,11 @@ impl AmqpChannelInternals {
                 self.tx.send(Ok(frame));
                 Ok(())
             },
+            AmqpFramePayload::Method(AmqpMethod::BasicRecoverOk()) if self.wait_list.basic_recover_ok.get() => {
+                self.wait_list.basic_recover_ok.set(false);
+                self.tx.send(Ok(frame));
+                Ok(())
+            },            
             AmqpFramePayload::Method(AmqpMethod::BasicConsumeOk(ref tag)) if self.wait_list.basic_consume_ok.get() => {
                 self.wait_list.basic_consume_ok.set(false);
                 match self.install_consumer.take() {
@@ -1230,6 +1251,7 @@ mod tests {
 
             let _ = channel.publish("".to_string(), "test-queue".to_string(), properties, AmqpPublishFlags::new().mandatory(true), "test-data".as_bytes());
 
+            channel.recover(true).await;
             async_sleep(Duration::new(2, 0)).await;
 
             let r2 = channel.close().await;
