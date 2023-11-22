@@ -250,7 +250,7 @@ impl AmqpChannel {
         Ok(())
     }
 
-    pub async fn consume(&mut self, queue: String, tag: String, callback: Box<dyn Fn(u64, bool, String, String, AmqpMessage)>, flags: AmqpConsumeFlags) -> Result<String, AmqpConnectionError> {
+    pub async fn consume(&mut self, queue: String, tag: String, callback: Box<dyn Fn(&AmqpChannelInternals, u64, bool, String, String, AmqpMessage)>, flags: AmqpConsumeFlags) -> Result<String, AmqpConnectionError> {
         self.ptr.is_channel_valid()?;
 
         // With no-wait tag must be set
@@ -348,7 +348,9 @@ impl AmqpChannel {
     }
 }
 
-struct AmqpChannelInternals {
+pub type AmqpChannelInterface = AmqpChannelInternals;
+
+pub struct AmqpChannelInternals {
     connection: Rc<AmqpConnectionInternal>,
     rx: AsyncChannelRx<Result<AmqpFrame, AmqpConnectionError>>,
     tx: AsyncChannelTx<Result<AmqpFrame, AmqpConnectionError>>,
@@ -358,7 +360,7 @@ struct AmqpChannelInternals {
     last_error: RefCell<Option<AmqpConnectionError>>,
     on_return: RefCell<Option<Box<dyn Fn(i16, String, String, String, AmqpMessage)>>>,
     message_in_flight: RefCell<AmqpMessageBuilder>,
-    consumers: RefCell<HashMap<String, Box<dyn Fn(u64, bool, String, String, AmqpMessage)>>>,
+    consumers: RefCell<HashMap<String, Box<dyn Fn(&AmqpChannelInterface, u64, bool, String, String, AmqpMessage)>>>,
 }
 
 #[derive(Debug, Default)]
@@ -434,10 +436,11 @@ impl AmqpChannelInternals {
                     Some((MessageDeliveryMode::Deliver(consumer_tag, delivery_tag, redelivered, exchange, routing_key), message)) => {
                         let consumers = self.consumers.borrow();
                         let consumer = consumers.get(&consumer_tag);
+                        println!("GOT MESSAGE - {} - tag {}", consumer.is_some(), consumer_tag);
                         match consumer {
                             None => (),
                             Some(callback) => {
-                                callback(delivery_tag, redelivered, exchange, routing_key, message);
+                                callback(self, delivery_tag, redelivered, exchange, routing_key, message);
                             },
                         }
                     },
@@ -1092,7 +1095,7 @@ mod tests {
             let _ = channel.qos(0, 1, false).await;
             println!("After basic qos!");
 
-            let tag = channel.consume("test-queue".to_string(), String::new(), Box::new(|_, _, _, _, _| { }), AmqpConsumeFlags::new()).await.unwrap();
+            let tag = channel.consume("test-queue".to_string(), String::new(), Box::new(|_, _, _, _, _, _| { }), AmqpConsumeFlags::new()).await.unwrap();
             println!("After basic consume!");
 
             let _ = channel.cancel(tag, false).await;

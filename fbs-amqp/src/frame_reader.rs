@@ -22,7 +22,7 @@ impl<'buffer> AmqpFrameReader<'buffer> {
     }
 
     fn read_content_frame(&mut self) -> Result<AmqpFramePayload, AmqpFrameError> {
-        Ok(AmqpFramePayload::Content((self.read_remaining_bytes())))
+        Ok(AmqpFramePayload::Content(self.read_remaining_bytes()))
     }
 
     fn read_header_frame(&mut self) -> Result<AmqpFramePayload, AmqpFrameError> {
