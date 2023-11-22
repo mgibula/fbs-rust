@@ -97,6 +97,7 @@ pub enum AmqpMethod {
     BasicGet(String, bool),                                                         // queue, no-ack
     BasicGetOk(u64, bool, String, String, u32),                                     // delivery-tag, redelivered, exchange, routing-key, messages
     BasicGetEmpty(),
+    BasicReject(u64, bool),                                                         // delivery-tag, requeue
 }
 
 #[derive(Debug, Clone)]

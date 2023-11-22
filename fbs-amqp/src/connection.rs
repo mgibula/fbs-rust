@@ -370,6 +370,10 @@ impl AmqpChannel {
     pub fn ack(&self, delivery_tag: u64, multiple: bool) {
         self.ptr.ack(delivery_tag, multiple)
     }
+
+    pub fn reject(&self, delivery_tag: u64, requeue: bool) {
+        self.ptr.reject(delivery_tag, requeue)
+    }    
 }
 
 pub type AmqpChannelInterface = AmqpChannelInternals;
@@ -438,6 +442,15 @@ impl AmqpChannelInternals {
 
         self.connection.writer_queue.send(Some(frame));
     }
+
+    fn reject(&self, delivery_tag: u64, requeue: bool) {
+        let frame = AmqpFrame {
+            channel: self.number.get() as u16,
+            payload: AmqpFramePayload::Method(AmqpMethod::BasicReject(delivery_tag, requeue)),
+        };
+
+        self.connection.writer_queue.send(Some(frame));
+    }    
 
     fn is_channel_valid(&self) -> Result<(), AmqpConnectionError> {
         let last_error = self.last_error.borrow();
@@ -1241,8 +1254,15 @@ mod tests {
             let _ = channel.declare_queue("test-queue-empty".to_string(), AmqpQueueFlags::new().durable(true)).await;
             println!("After declare queue!");
 
-            let envelope = channel.get("test-queue-empty".to_string(), false).await.unwrap();
+            let envelope = channel.get("test-queue".to_string(), false).await.unwrap();
             println!("After basic consume!");
+
+            match envelope {
+                None => (),
+                Some((tag, _, _, _, _, _)) => {
+                    channel.reject(tag, true);
+                },
+            }
 
             dbg!(envelope);
 
