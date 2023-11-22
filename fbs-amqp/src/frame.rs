@@ -100,6 +100,7 @@ pub enum AmqpMethod {
     BasicReject(u64, bool),                                                         // delivery-tag, requeue
     BasicRecover(bool),                                                             // requeue
     BasicRecoverOk(),
+    BasicNack(u64, u8),                                                             // delivery-tag, multiple, requeue
 }
 
 #[derive(Debug, Clone)]

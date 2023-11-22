@@ -316,3 +316,40 @@ impl Into<u8> for AmqpPublishFlags {
         self.flags
     }
 }
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct AmqpNackFlags {
+    flags: u8,
+}
+
+impl AmqpNackFlags {
+    pub fn new() -> Self {
+        Self { flags: 0 }
+    }
+
+    pub fn multiple(mut self, value: bool) -> Self {
+        if value {
+            self.flags |= 1 << 0;
+        } else {
+            self.flags &= !(1 << 0);
+        }
+
+        self
+    }
+
+    pub fn requeue(mut self, value: bool) -> Self {
+        if value {
+            self.flags |= 1 << 1;
+        } else {
+            self.flags &= !(1 << 1);
+        }
+
+        self
+    }
+}
+
+impl Into<u8> for AmqpNackFlags {
+    fn into(self) -> u8 {
+        self.flags
+    }
+}

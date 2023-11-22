@@ -11,7 +11,7 @@ use fbs_runtime::{async_connect, async_write, async_read_into, async_spawn};
 use fbs_runtime::resolver::{resolve_address, ResolveAddressError};
 use fbs_executor::TaskHandle;
 
-use super::{AmqpDeleteExchangeFlags, AmqpExchangeFlags, AmqpQueueFlags, AmqpDeleteQueueFlags, AmqpConsumeFlags, AmqpPublishFlags};
+use super::{AmqpDeleteExchangeFlags, AmqpExchangeFlags, AmqpQueueFlags, AmqpDeleteQueueFlags, AmqpConsumeFlags, AmqpPublishFlags, AmqpNackFlags};
 use super::defines::AMQP_CLASS_BASIC;
 use super::frame::{AmqpProtocolHeader, AmqpFrame, AmqpFrameError, AmqpFramePayload, AmqpMethod, AmqpBasicProperties, AmqpMessage};
 use super::frame_reader::AmqpFrameReader;
@@ -388,6 +388,10 @@ impl AmqpChannel {
 
     pub fn reject(&self, delivery_tag: u64, requeue: bool) {
         self.ptr.reject(delivery_tag, requeue)
+    }
+
+    pub fn nack(&self, delivery_tag: u64, flags: AmqpNackFlags) {
+        self.ptr.nack(delivery_tag, flags)
     }    
 }
 
@@ -463,6 +467,15 @@ impl AmqpChannelInternals {
         let frame = AmqpFrame {
             channel: self.number.get() as u16,
             payload: AmqpFramePayload::Method(AmqpMethod::BasicReject(delivery_tag, requeue)),
+        };
+
+        self.connection.writer_queue.send(Some(frame));
+    }
+
+    fn nack(&self, delivery_tag: u64, flags: AmqpNackFlags) {
+        let frame = AmqpFrame {
+            channel: self.number.get() as u16,
+            payload: AmqpFramePayload::Method(AmqpMethod::BasicNack(delivery_tag, flags.into())),
         };
 
         self.connection.writer_queue.send(Some(frame));
@@ -1282,7 +1295,7 @@ mod tests {
             match envelope {
                 None => (),
                 Some((tag, _, _, _, _, _)) => {
-                    channel.reject(tag, true);
+                    channel.nack(tag, AmqpNackFlags::new());
                 },
             }
 
