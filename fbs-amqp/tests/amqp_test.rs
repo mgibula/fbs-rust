@@ -1,90 +1,75 @@
 use std::time::Duration;
+use std::rc::Rc;
+use std::cell::Cell;
+
 use fbs_amqp::*;
 use fbs_runtime::{async_run, async_sleep};
 
 #[test]
-fn connect_test() {
+fn bad_connect_test() {
     async_run(async {
-        let mut amqp = AmqpConnection::new("asd".to_string());
-        let result = amqp.connect("guest", "guest").await;
-        assert!(result.is_err());
-    });    
-}
+        let params = AmqpConnectionParams::default();
+        let connection = AmqpConnection::connect(&params).await;
 
-
-#[test]
-fn good_connect_test() {
-    async_run(async {
-        let mut amqp = AmqpConnection::new("localhost".to_string());
-        let result = amqp.connect("guest", "guest").await;
-        dbg!(result);
-
-        let mut channel = amqp.channel_open().await.unwrap();
-        println!("Got channel opened!");
-
-        let flow = channel.flow(true).await;
-        println!("After flow!");
-        dbg!(flow);
-
-        let _ = channel.declare_exchange("test-exchange".to_string(), "direct".to_string(), AmqpExchangeFlags::new()).await;
-        println!("After declare exchange!");
-
-        let _ = channel.declare_queue("test-queue".to_string(), AmqpQueueFlags::new().durable(true)).await;
-        println!("After declare queue!");
-
-        let _ = channel.bind_queue("test-queue".to_string(), "test-exchange".to_string(), "test-key".to_string(), false).await;
-        println!("After queue bind!");
-
-        let _ = channel.purge_queue("test-queue".to_string(), false).await;
-        println!("After queue purge!");
-
-        let _ = channel.qos(0, 1, false).await;
-        println!("After basic qos!");
-
-        let tag = channel.consume("test-queue".to_string(), String::new(), Box::new(|_, _, _, _, _| { }), AmqpConsumeFlags::new()).await.unwrap();
-        println!("After basic consume!");
-
-        let _ = channel.cancel(tag, false).await;
-        println!("After basic cancel!");
-
-        let _ = channel.unbind_queue("test-queue".to_string(), "test-exchange".to_string(), "test-key".to_string()).await;
-        println!("After queue unbind!");
-
-        let _ = channel.delete_queue("test-queue".to_string(), AmqpDeleteQueueFlags::new()).await;
-        println!("After queue delete!");
-
-        let _ = channel.delete_exchange("test-exchange".to_string(), AmqpDeleteExchangeFlags::new().if_unused(true)).await;
-        println!("After delete exchange!");
-
-        let r2 = channel.close().await;
-        dbg!(r2);
-        println!("Got channel closed!");
-
-        amqp.close().await;
-        println!("Got connection closed!");
+        assert!(connection.is_err());
     });
 }
 
 #[test]
-fn publish_test() {
+fn good_connect_test() {
     async_run(async {
-        let mut amqp = AmqpConnection::new("localhost".to_string());
-        let _ = amqp.connect("guest", "guest").await;
+        let mut params = AmqpConnectionParams::default();
+        params.address = "localhost".to_string();
+        params.username = "guest".to_string();
+        params.password = "guest".to_string();
+        params.vhost = "/".to_string();
 
-        let mut channel = amqp.channel_open().await.unwrap();
-        println!("Got channel opened!");
+        let connection = AmqpConnection::connect(&params).await;
+        assert!(connection.is_ok());
+    });
+}
+#[test]
+fn basic_operations_test() {
+    let result = async_run::<Result<(), AmqpConnectionError>>(async {
+        let mut params = AmqpConnectionParams::default();
+        params.address = "localhost".to_string();
+        params.username = "guest".to_string();
+        params.password = "guest".to_string();
+        params.vhost = "/".to_string();
 
-        let _ = channel.flow(true).await;
-        println!("After flow!");
+        let mut amqp = AmqpConnection::connect(&params).await?;
+        let mut channel = amqp.channel_open().await?;
+        channel.declare_exchange("test-exchange-1".to_string(), "direct".to_string(), AmqpExchangeFlags::new()).await?;
+        channel.declare_queue("test-queue-1".to_string(), AmqpQueueFlags::new().durable(true)).await?;
+        channel.bind_queue("test-queue-1".to_string(), "test-exchange-1".to_string(), "test-key-1".to_string(), false).await?;
+        channel.purge_queue("test-queue-1".to_string(), false).await?;
+        channel.qos(0, 1, false).await?;
+        let tag = channel.consume("test-queue-1".to_string(), String::new(), Box::new(|_, _, _, _, _| { }), AmqpConsumeFlags::new()).await?;
+        channel.recover(true).await?;
+        channel.cancel(tag, false).await?;
+        channel.unbind_queue("test-queue-1".to_string(), "test-exchange-1".to_string(), "test-key-1".to_string()).await?;
+        channel.delete_queue("test-queue-1".to_string(), AmqpDeleteQueueFlags::new()).await?;
+        channel.delete_exchange("test-exchange-1".to_string(), AmqpDeleteExchangeFlags::new()).await?;
+        channel.close().await?;
+        amqp.close().await;
+        Ok(())
+    });
 
-        let _ = channel.declare_exchange("test-exchange".to_string(), "direct".to_string(), AmqpExchangeFlags::new()).await;
-        println!("After declare exchange!");
+    assert!(result.is_ok());
+}
 
-        let _ = channel.declare_queue("test-queue".to_string(), AmqpQueueFlags::new().durable(true)).await;
-        println!("After declare queue!");
+#[test]
+fn consume_test() {
+    let result = async_run::<Result<(), AmqpConnectionError>>(async {
+        let mut params = AmqpConnectionParams::default();
+        params.address = "localhost".to_string();
+        params.username = "guest".to_string();
+        params.password = "guest".to_string();
+        params.vhost = "/".to_string();
 
-        // let _ = channel.purge_queue("test-queue".to_string(), false).await;
-        // println!("After queue purge!");
+        let mut amqp = AmqpConnection::connect(&params).await?;
+        let mut channel = amqp.channel_open().await?;
+        let publisher = channel.publisher();
 
         let mut properties = AmqpBasicProperties::default();
         properties.content_type = Some("text/plain".to_string());
@@ -95,94 +80,153 @@ fn publish_test() {
         properties.message_id = Some("message id test".to_string());
         properties.priority = Some(2);
 
-        channel.set_on_return(Some(Box::new(|code, reason, exchange, routing_key, message| {
-            println!("Got return ({}, {}, {}, {}) - {:?}", code, reason, exchange, routing_key, message);
-        })));
+        let counter = Rc::new(Cell::new(0));
+        let counter_copy = counter.clone();
+    
+        let consume = Box::new(move |_, _, exchange, routing_key, message: AmqpMessage| {
+            assert_eq!(exchange, "");
+            assert_eq!(routing_key, "test-queue-2");
+            assert_eq!(message.properties.content_type, Some("text/plain".to_string()));
+            assert_eq!(message.properties.correlation_id, Some("correlation_id test".to_string()));
+            assert_eq!(message.properties.app_id, Some("app_id test".to_string()));
+            assert_eq!(message.properties.timestamp, Some(234524));
+            assert_eq!(message.properties.cluster_id, Some("cluster_id test".to_string()));
+            assert_eq!(message.properties.message_id, Some("message id test".to_string()));
+            assert_eq!(message.properties.priority, Some(2));
+            assert_eq!(message.content.as_slice(), "test-content".as_bytes());
+            counter_copy.set(counter_copy.get() + 1);
+        });   
 
-        let consume = Box::new(|tag, redelivered, exchange, routing_key, message| {
-            println!("Got message ({}, {}, {}, {}) - {:?}", tag, redelivered, exchange, routing_key, message);
-        });
+        channel.declare_queue("test-queue-2".to_string(), AmqpQueueFlags::new().durable(true)).await?;
+        channel.purge_queue("test-queue-2".to_string(), false).await?;
+        channel.consume("test-queue-2".to_string(), String::new(), consume, AmqpConsumeFlags::new()).await?;
 
-        let tag = channel.consume("test-queue".to_string(), String::new(), consume, AmqpConsumeFlags::new()).await.unwrap();
-        println!("After basic consume!");
+        publisher.publish("".to_string(), "test-queue-2".to_string(), properties, AmqpPublishFlags::new(), "test-content".as_bytes())?;
 
-        let _ = channel.publish("".to_string(), "test-queue".to_string(), properties, AmqpPublishFlags::new().mandatory(true), "test-data".as_bytes());
-
-        channel.recover(true).await;
-        async_sleep(Duration::new(2, 0)).await;
-
-        let r2 = channel.close().await;
-        dbg!(r2);
-        println!("Got channel closed!");
-
+        async_sleep(Duration::new(1, 0)).await;
+        channel.delete_queue("test-queue-2".to_string(), AmqpDeleteQueueFlags::new()).await?;
+        channel.close().await?;
         amqp.close().await;
-        println!("Got connection closed!");
+
+        assert_eq!(counter.get(), 1);
+        Ok(())
     });
+
+    assert!(result.is_ok());    
 }
 
 #[test]
-fn no_sense_test() {
-    async_run(async {
-        let mut amqp = AmqpConnection::new("localhost".to_string());
-        let _ = amqp.connect("guest", "guest").await;
+fn return_test() {
+    let result = async_run::<Result<(), AmqpConnectionError>>(async {
+        let mut params = AmqpConnectionParams::default();
+        params.address = "localhost".to_string();
+        params.username = "guest".to_string();
+        params.password = "guest".to_string();
+        params.vhost = "/".to_string();
 
-        let mut channel = amqp.channel_open().await.unwrap();
-        println!("Got channel opened!");
+        let mut amqp = AmqpConnection::connect(&params).await?;
+        let mut channel = amqp.channel_open().await?;
+        let publisher = channel.publisher();
 
-        let _ = channel.declare_queue("test-queue-empty".to_string(), AmqpQueueFlags::new().durable(true)).await;
-        println!("After declare queue!");
+        let mut properties = AmqpBasicProperties::default();
+        properties.content_type = Some("text/plain".to_string());
+        properties.correlation_id = Some("correlation_id test".to_string());
+        properties.app_id = Some("app_id test".to_string());
+        properties.timestamp = Some(234524);
+        properties.cluster_id = Some("cluster_id test".to_string());
+        properties.message_id = Some("message id test".to_string());
+        properties.priority = Some(2);
 
-        let envelope = channel.get("test-queue".to_string(), false).await.unwrap();
-        println!("After basic consume!");
+        publisher.publish("".to_string(), "test-queue-3".to_string(), properties, AmqpPublishFlags::new().mandatory(true), "test-content".as_bytes())?;
 
-        match envelope {
-            None => (),
-            Some((tag, _, _, _, _, _)) => {
-                channel.nack(tag, AmqpNackFlags::new());
+        let counter = Rc::new(Cell::new(0));
+        let counter_copy = counter.clone();
+
+        let return_cb = Box::new(move |_, _, exchange, routing_key, message: AmqpMessage| {
+            assert_eq!(exchange, "");
+            assert_eq!(routing_key, "test-queue-nonexisting");
+            assert_eq!(message.properties.content_type, Some("text/plain".to_string()));
+            assert_eq!(message.properties.correlation_id, Some("correlation_id test".to_string()));
+            assert_eq!(message.properties.app_id, Some("app_id test".to_string()));
+            assert_eq!(message.properties.timestamp, Some(234524));
+            assert_eq!(message.properties.cluster_id, Some("cluster_id test".to_string()));
+            assert_eq!(message.properties.message_id, Some("message id test".to_string()));
+            assert_eq!(message.properties.priority, Some(2));
+            assert_eq!(message.content.as_slice(), "test-content".as_bytes());
+            counter_copy.set(counter_copy.get() + 1);
+        });   
+
+        channel.set_on_return(Some(Box::new(return_cb)));
+
+
+        async_sleep(Duration::new(1, 0)).await;
+        channel.close().await?;
+        amqp.close().await;
+
+        assert_eq!(counter.get(), 1);
+        Ok(())
+    });
+
+    assert!(result.is_ok());    
+}
+
+
+#[test]
+fn get_test() {
+    let result = async_run::<Result<(), AmqpConnectionError>>(async {
+        let mut params = AmqpConnectionParams::default();
+        params.address = "localhost".to_string();
+        params.username = "guest".to_string();
+        params.password = "guest".to_string();
+        params.vhost = "/".to_string();
+
+        let mut amqp = AmqpConnection::connect(&params).await?;
+        let mut channel = amqp.channel_open().await?;
+        let publisher = channel.publisher();
+
+        let mut properties = AmqpBasicProperties::default();
+        properties.content_type = Some("text/plain".to_string());
+        properties.correlation_id = Some("correlation_id test".to_string());
+        properties.app_id = Some("app_id test".to_string());
+        properties.timestamp = Some(234524);
+        properties.cluster_id = Some("cluster_id test".to_string());
+        properties.message_id = Some("message id test".to_string());
+        properties.priority = Some(2);
+
+        channel.declare_queue("test-queue-3".to_string(), AmqpQueueFlags::new().durable(true)).await?;
+        channel.purge_queue("test-queue-3".to_string(), false).await?;
+
+        publisher.publish("".to_string(), "test-queue-3".to_string(), properties, AmqpPublishFlags::new(), "test-content".as_bytes())?;
+        async_sleep(Duration::new(1, 0)).await;
+
+        let result = channel.get("test-queue-3".to_string(), true).await?;
+        assert!(result.is_some());
+        match result {
+            None => panic!(),
+            Some((_, _, exchange, routing_key, _, message)) => {
+                assert_eq!(exchange, "");
+                assert_eq!(routing_key, "test-queue-3");
+                assert_eq!(message.properties.content_type, Some("text/plain".to_string()));
+                assert_eq!(message.properties.correlation_id, Some("correlation_id test".to_string()));
+                assert_eq!(message.properties.app_id, Some("app_id test".to_string()));
+                assert_eq!(message.properties.timestamp, Some(234524));
+                assert_eq!(message.properties.cluster_id, Some("cluster_id test".to_string()));
+                assert_eq!(message.properties.message_id, Some("message id test".to_string()));
+                assert_eq!(message.properties.priority, Some(2));
+                assert_eq!(message.content.as_slice(), "test-content".as_bytes());
             },
         }
 
-        dbg!(envelope);
+        let result = channel.get("test-queue-3".to_string(), true).await?;
+        assert!(result.is_none());
 
-        async_sleep(Duration::new(2, 0)).await;
+        channel.delete_queue("test-queue-3".to_string(), AmqpDeleteQueueFlags::new()).await?;
 
-        let r2 = channel.close().await;
-        dbg!(r2);
-        println!("Got channel closed!");
-
+        channel.close().await?;
         amqp.close().await;
-        println!("Got connection closed!");
+
+        Ok(())
     });
-}    
 
-#[test]
-fn confirm_test() {
-    async_run(async {
-        let mut amqp = AmqpConnection::new("localhost".to_string());
-        let _ = amqp.connect("guest", "guest").await;
-
-        let mut channel = amqp.channel_open().await.unwrap();
-        println!("Got channel opened!");
-
-        let on_ack = Box::new(|tag, multiple| {
-            println!("Got ack");
-        });
-
-        let on_nack = Box::new(|tag, flags| {
-            println!("Got nack");
-        });
-
-        channel.confirm_select((on_ack, on_nack), false).await;
-
-        let _ = channel.publish("".to_string(), "test-queue".to_string(), AmqpBasicProperties::default(), AmqpPublishFlags::new().mandatory(true), "test-data".as_bytes());
-
-        async_sleep(Duration::new(2, 0)).await;
-
-        let r2 = channel.close().await;
-        dbg!(r2);
-        println!("Got channel closed!");
-
-        amqp.close().await;
-        println!("Got connection closed!");
-    });
-}    
+    assert!(result.is_ok());    
+}

@@ -2,6 +2,7 @@ use std::rc::Rc;
 use std::cmp::min;
 use std::cell::{RefCell, Cell};
 use std::collections::HashMap;
+use std::fmt::{Debug, Formatter};
 
 use super::*;
 use super::defines::*;
@@ -389,6 +390,16 @@ pub(super) struct AmqpChannelInternals {
     consumers: RefCell<HashMap<String, AmqpConsumer>>,
     install_consumer: Cell<Option<AmqpConsumer>>,
     confirm_callbacks: RefCell<Option<(AmqpConfirmAckCallback, AmqpConfirmNackCallback)>>,
+}
+
+impl Debug for AmqpChannelInternals {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AmqpConnectionInternal")
+        .field("wait_list", &self.wait_list)
+        .field("number", &self.number)
+        .field("active", &self.active)
+        .finish()
+    }
 }
 
 #[derive(Debug, Default)]

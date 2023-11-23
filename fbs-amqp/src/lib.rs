@@ -15,7 +15,7 @@ pub type AmqpConsumer = Box<dyn Fn(u64, bool, String, String, AmqpMessage)>;
 pub type AmqpConfirmAckCallback = Box<dyn Fn(u64, bool)>;
 pub type AmqpConfirmNackCallback = Box<dyn Fn(u64, AmqpNackFlags)>;
 
-pub use connection::AmqpConnection;
+pub use connection::{AmqpConnection, AmqpConnectionParams};
 pub use channel::{AmqpChannel, AmqpChannelPublisher};
 
 #[derive(Error, Debug, Clone)]

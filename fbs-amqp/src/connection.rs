@@ -2,6 +2,7 @@ use std::cell::{Cell, RefCell};
 use std::cmp::min;
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
+use std::fmt::{Debug, Formatter};
 
 use fbs_library::socket::{Socket, SocketDomain, SocketType, SocketFlags};
 use fbs_library::indexed_list::IndexedList;
@@ -18,20 +19,25 @@ use super::frame_writer::FrameWriter;
 
 const FRAME_EXTRA_SIZE: u32 = 8;  // size of frame header and footer
 
+#[derive(Debug, Default, Clone)]
+pub struct AmqpConnectionParams {
+    pub address: String,
+    pub username: String,
+    pub password: String,
+    pub vhost: String,
+}
+
+#[derive(Debug)]
 pub struct AmqpConnection {
     ptr: Rc<AmqpConnectionInternal>,
-    address: String,
 }
 
 impl AmqpConnection {
-    pub fn new(address: String) -> Self {
-        Self { ptr: Rc::new(AmqpConnectionInternal::new()), address }
-    }
+    pub async fn connect(params: &AmqpConnectionParams) -> Result<AmqpConnection, AmqpConnectionError> {
+        let result: AmqpConnection = AmqpConnection { ptr: Rc::new(AmqpConnectionInternal::new()) };
+        result.ptr.connect(params, result.ptr.clone()).await?;
 
-    pub async fn connect(&mut self, username: &str, password: &str) -> Result<(), AmqpConnectionError> {
-        let result = self.ptr.connect(&self.address, username, password, self.ptr.clone()).await;
-
-        result
+        Ok(result)
     }
 
     pub async fn channel_open(&mut self) -> Result<AmqpChannel, AmqpConnectionError> {
@@ -219,6 +225,20 @@ pub(super) struct AmqpConnectionInternal {
     last_error: RefCell<Option<AmqpConnectionError>>,
 }
 
+impl Debug for AmqpConnectionInternal {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AmqpConnectionInternal")
+        .field("max_frame_size", &self.max_frame_size.get())
+        .field("max_channels", &self.max_channels.get())
+        .field("heartbeat", &self.heartbeat.get())
+        .field("last_error", &self.last_error.borrow())
+        .field("fd", &self.fd)
+        .field("channels", &self.channels.borrow())
+        .field("writer_queue", &self.writer_queue)
+        .finish()
+    }
+}
+
 impl AmqpConnectionInternal {
     fn new() -> Self {
         let (_, tx) = async_channel_create();
@@ -325,8 +345,8 @@ impl AmqpConnectionInternal {
         }
     }
 
-    async fn connect(&self, address: &str, username: &str, password: &str, self_ptr: Rc<AmqpConnectionInternal>) -> Result<(), AmqpConnectionError> {
-        let address = resolve_address(address, Some(5672)).await?;
+    async fn connect(&self, params: &AmqpConnectionParams, self_ptr: Rc<AmqpConnectionInternal>) -> Result<(), AmqpConnectionError> {
+        let address = resolve_address(&params.address, Some(5672)).await?;
         let connected = async_connect(&self.fd, address).await;
         match connected {
             Ok(_) => (),
@@ -346,9 +366,9 @@ impl AmqpConnectionInternal {
 
         let mut sasl = String::new();
         sasl.push('\x00');
-        sasl.push_str(username);
+        sasl.push_str(&params.username);
         sasl.push('\x00');
-        sasl.push_str(password);
+        sasl.push_str(&params.password);
 
         let response = AmqpFrame {
             channel: 0,
@@ -388,7 +408,7 @@ impl AmqpConnectionInternal {
 
         let response = AmqpFrame {
             channel: 0,
-            payload: AmqpFramePayload::Method(AmqpMethod::ConnectionOpen("/".to_string())),
+            payload: AmqpFramePayload::Method(AmqpMethod::ConnectionOpen(params.vhost.clone())),
         };
 
         writer.enqueue_frame(response);

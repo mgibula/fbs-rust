@@ -61,6 +61,7 @@ pub enum SocketOptions {
     ReuseAddr(bool),
 }
 
+#[derive(Debug)]
 pub struct Socket {
     fd: OwnedFd,
 }
