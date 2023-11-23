@@ -21,7 +21,7 @@ impl AmqpChannel {
     }
 
     pub fn publisher(&self) -> AmqpChannelPublisher {
-        AmqpChannelPublisher { 
+        AmqpChannelPublisher {
             ptr: self.ptr.clone(),
         }
     }
@@ -287,7 +287,7 @@ impl AmqpChannel {
             channel: self.ptr.number.get() as u16,
             payload: AmqpFramePayload::Method(AmqpMethod::BasicConsume(queue, tag.clone(), flags.into(), HashMap::new())),
         };
-        
+
         self.ptr.connection.writer_queue.send(Some(frame));
 
         if !flags.has_no_wait() {
@@ -349,7 +349,7 @@ impl AmqpChannel {
 
     pub fn nack(&self, delivery_tag: u64, flags: AmqpNackFlags) {
         self.ptr.nack(delivery_tag, flags)
-    }    
+    }
 }
 
 #[derive(Clone)]
@@ -426,7 +426,7 @@ impl AmqpChannelInternals {
     fn new(connection: Rc<AmqpConnectionInternal>) -> Self {
         let (rx, tx) = async_channel_create();
         let (message_rx, message_tx) = async_channel_create();
-        
+
         Self {
             connection,
             wait_list: FrameWaiter::default(),
@@ -504,7 +504,7 @@ impl AmqpChannelInternals {
         };
 
         self.connection.writer_queue.send(Some(frame));
-    }    
+    }
 
     fn is_channel_valid(&self) -> Result<(), AmqpConnectionError> {
         let last_error = self.last_error.borrow();
@@ -536,7 +536,7 @@ impl AmqpChannelInternals {
                     Some((MessageDeliveryMode::Deliver(consumer_tag, delivery_tag, redelivered, exchange, routing_key), message)) => {
                         let consumers = self.consumers.borrow();
                         let consumer = consumers.get(&consumer_tag);
-                        
+
                         match consumer {
                             None => eprintln!("Received message with consumer tag {}, but no consumer installed", consumer_tag),
                             Some(callback) => {
@@ -635,7 +635,7 @@ impl AmqpChannelInternals {
                 self.wait_list.basic_recover_ok.set(false);
                 self.tx.send(Ok(frame));
                 Ok(())
-            },            
+            },
             AmqpFramePayload::Method(AmqpMethod::BasicConsumeOk(ref tag)) if self.wait_list.basic_consume_ok.get() => {
                 self.wait_list.basic_consume_ok.set(false);
                 match self.install_consumer.take() {
