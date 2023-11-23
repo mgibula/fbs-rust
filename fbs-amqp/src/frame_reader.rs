@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use super::frame::{AmqpFrameError, AmqpFrame, AmqpFramePayload, AmqpMethod, AmqpData, AmqpBasicProperties};
+use super::{AmqpData, AmqpBasicProperties};
+use super::AmqpFrameError;
+use super::frame::{AmqpFrame, AmqpFramePayload, AmqpMethod};
 use super::defines::*;
 
 pub(super) struct AmqpFrameReader<'buffer> {

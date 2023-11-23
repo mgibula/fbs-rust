@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
-use super::frame::{AmqpFrame, AmqpFramePayload, AmqpMethod, AmqpData, AmqpBasicProperties};
+use super::{AmqpData, AmqpBasicProperties};
+use super::frame::{AmqpFrame, AmqpFramePayload, AmqpMethod};
 use super::defines::*;
 
 pub(super) struct FrameWriter;

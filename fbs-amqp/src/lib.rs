@@ -1,9 +1,110 @@
-pub(crate) mod defines;
-pub(crate) mod frame;
-pub(crate) mod frame_reader;
-pub(crate) mod frame_writer;
-pub mod connection;
+use std::collections::HashMap;
+use std::string::FromUtf8Error;
+use fbs_library::system_error::SystemError;
+use fbs_runtime::resolver::ResolveAddressError;
+use thiserror::Error;
 
+mod defines;
+mod frame;
+mod frame_reader;
+mod frame_writer;
+mod connection;
+mod channel;
+
+pub type AmqpConsumer = Box<dyn Fn(u64, bool, String, String, AmqpMessage)>;
+pub type AmqpConfirmAckCallback = Box<dyn Fn(u64, bool)>;
+pub type AmqpConfirmNackCallback = Box<dyn Fn(u64, AmqpNackFlags)>;
+
+pub use connection::AmqpConnection;
+pub use channel::{AmqpChannel, AmqpChannelPublisher};
+
+#[derive(Error, Debug, Clone)]
+pub enum AmqpConnectionError {
+    #[error("AMQP address incorrect")]
+    AddressIncorrect(#[from] ResolveAddressError),
+    #[error("Connect error")]
+    ConnectError(SystemError),
+    #[error("Write error")]
+    WriteError(SystemError),
+    #[error("Read error")]
+    ReadError(SystemError),
+    #[error("Connection closed")]
+    ConnectionClosed,
+    #[error("Invalid type frame")]
+    FrameTypeUnknown(u8),
+    #[error("Invalid frame end")]
+    FrameEndInvalid,
+    #[error("Frame error: {0}")]
+    FrameError(#[from] AmqpFrameError),
+    #[error("Connection closed by server - {1}")]
+    ConnectionClosedByServer(u16, String, u16, u16),
+    #[error("Protocol error")]
+    ProtocolError(&'static str),
+    #[error("Channel closed by server - {1}")]
+    ChannelClosedByServer(u16, String, u16, u16),
+    #[error("Invalid parameters")]
+    InvalidParameters,
+}
+
+#[derive(Error, Debug, Clone)]
+pub enum AmqpFrameError {
+    #[error("Buffer too short")]
+    BufferTooShort,
+    #[error("Invalid frame type - {0}")]
+    InvalidFrameType(u8),
+    #[error("Invalid class/method - {0}/{1}")]
+    InvalidClassMethod(u16, u16),
+    #[error("Invalid string utf-8 format")]
+    InvalidStringFormat(#[from] FromUtf8Error),
+    #[error("Invalid field type - {0}")]
+    InvalidFieldType(u8),
+}
+
+#[derive(Debug, Clone)]
+pub enum AmqpData {
+    None,
+    Bool(bool),
+    I8(i8),
+    U8(u8),
+    I16(i16),
+    U16(u16),
+    I32(i32),
+    U32(u32),
+    I64(i64),
+    U64(u64),
+    Float(f32),
+    Double(f64),
+    Decimal(u8, u32),
+    ShortString(String),
+    LongString(String),
+    FieldArray(Vec<AmqpData>),
+    Timestamp(u64),
+    FieldTable(HashMap<String, AmqpData>),
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct AmqpBasicProperties {
+    pub content_type: Option<String>,                   // bit 15
+    pub content_encoding: Option<String>,               // bit 14
+    pub headers: Option<HashMap<String, AmqpData>>,     // bit 13
+    pub delivery_mode: Option<u8>,                      // bit 12
+    pub priority: Option<u8>,                           // bit 11
+    pub correlation_id: Option<String>,                 // bit 10
+    pub reply_to: Option<String>,                       // bit 9
+    pub expiration: Option<String>,                     // bit 8
+    pub message_id: Option<String>,                     // bit 7
+    pub timestamp: Option<u64>,                         // bit 6
+    pub message_type: Option<String>,                   // bit 5
+    pub user_id: Option<String>,                        // bit 4
+    pub app_id: Option<String>,                         // bit 3
+    pub cluster_id: Option<String>,                     // bit 2
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct AmqpMessage {
+    pub properties: AmqpBasicProperties,
+    pub content: Vec<u8>,
+}
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct AmqpExchangeFlags {

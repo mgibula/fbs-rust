@@ -1,6 +1,6 @@
 use super::defines::PROTOCOL_HEADER;
-use std::{collections::HashMap, string::FromUtf8Error};
-use thiserror::Error;
+use super::{AmqpBasicProperties, AmqpData};
+use std::collections::HashMap;
 
 pub(super) struct AmqpProtocolHeader;
 
@@ -28,30 +28,6 @@ pub enum AmqpFramePayload {
     Header(u16, u64, AmqpBasicProperties),
     Content(Vec<u8>),
     Heartbeat(AmqpHeartbeatFrame),
-}
-
-#[derive(Debug, Default, Clone)]
-pub struct AmqpBasicProperties {
-    pub content_type: Option<String>,                   // bit 15
-    pub content_encoding: Option<String>,               // bit 14
-    pub headers: Option<HashMap<String, AmqpData>>,     // bit 13
-    pub delivery_mode: Option<u8>,                      // bit 12
-    pub priority: Option<u8>,                           // bit 11
-    pub correlation_id: Option<String>,                 // bit 10
-    pub reply_to: Option<String>,                       // bit 9
-    pub expiration: Option<String>,                     // bit 8
-    pub message_id: Option<String>,                     // bit 7
-    pub timestamp: Option<u64>,                         // bit 6
-    pub message_type: Option<String>,                   // bit 5
-    pub user_id: Option<String>,                        // bit 4
-    pub app_id: Option<String>,                         // bit 3
-    pub cluster_id: Option<String>,                     // bit 2
-}
-
-#[derive(Debug, Default, Clone)]
-pub struct AmqpMessage {
-    pub properties: AmqpBasicProperties,
-    pub content: Vec<u8>,
 }
 
 #[derive(Debug, Clone)]
@@ -108,40 +84,4 @@ pub enum AmqpMethod {
 #[derive(Debug, Clone)]
 pub struct AmqpHeartbeatFrame {
 
-}
-
-#[derive(Debug, Clone)]
-pub enum AmqpData {
-    None,
-    Bool(bool),
-    I8(i8),
-    U8(u8),
-    I16(i16),
-    U16(u16),
-    I32(i32),
-    U32(u32),
-    I64(i64),
-    U64(u64),
-    Float(f32),
-    Double(f64),
-    Decimal(u8, u32),
-    ShortString(String),
-    LongString(String),
-    FieldArray(Vec<AmqpData>),
-    Timestamp(u64),
-    FieldTable(HashMap<String, AmqpData>),
-}
-
-#[derive(Error, Debug, Clone)]
-pub enum AmqpFrameError {
-    #[error("Buffer too short")]
-    BufferTooShort,
-    #[error("Invalid frame type - {0}")]
-    InvalidFrameType(u8),
-    #[error("Invalid class/method - {0}/{1}")]
-    InvalidClassMethod(u16, u16),
-    #[error("Invalid string utf-8 format")]
-    InvalidStringFormat(#[from] FromUtf8Error),
-    #[error("Invalid field type - {0}")]
-    InvalidFieldType(u8),
 }
