@@ -139,8 +139,10 @@ impl AmqpChannel {
 
         self.ptr.connection.writer_queue.send(Some(frame));
 
-        self.ptr.wait_list.exchange_delete_ok.set(true);
-        self.ptr.rx.receive().await?;
+        if !flags.has_no_wait() {
+            self.ptr.wait_list.exchange_delete_ok.set(true);
+            self.ptr.rx.receive().await?;
+        }
 
         Ok(())
     }
