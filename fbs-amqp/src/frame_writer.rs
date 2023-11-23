@@ -3,10 +3,10 @@ use std::collections::HashMap;
 use super::frame::{AmqpFrame, AmqpFramePayload, AmqpMethod, AmqpData, AmqpBasicProperties};
 use super::defines::*;
 
-pub struct FrameWriter;
+pub(super) struct FrameWriter;
 
 impl FrameWriter {
-    pub fn write_frame(frame: &AmqpFrame) -> Vec<u8> {
+    pub(super) fn write_frame(frame: &AmqpFrame) -> Vec<u8> {
         let mut result = Vec::new();
 
         match &frame.payload {

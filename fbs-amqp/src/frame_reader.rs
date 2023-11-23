@@ -3,16 +3,16 @@ use std::collections::HashMap;
 use super::frame::{AmqpFrameError, AmqpFrame, AmqpFramePayload, AmqpMethod, AmqpData, AmqpBasicProperties};
 use super::defines::*;
 
-pub struct AmqpFrameReader<'buffer> {
+pub(super) struct AmqpFrameReader<'buffer> {
     data: &'buffer [u8],
 }
 
 impl<'buffer> AmqpFrameReader<'buffer> {
-    pub fn new(data: &'buffer[u8]) -> AmqpFrameReader<'buffer> {
+    pub(super) fn new(data: &'buffer[u8]) -> AmqpFrameReader<'buffer> {
         Self { data }
     }
 
-    pub fn read_frame(&mut self, frame_type: u8, channel: u16) -> Result<AmqpFrame, AmqpFrameError> {
+    pub(super) fn read_frame(&mut self, frame_type: u8, channel: u16) -> Result<AmqpFrame, AmqpFrameError> {
         match frame_type {
             AMQP_FRAME_TYPE_METHOD => Ok(AmqpFrame { channel, payload: AmqpFramePayload::Method(self.read_method_frame()?) }),
             AMQP_FRAME_TYPE_HEADER => Ok(AmqpFrame { channel, payload: self.read_header_frame()? }),

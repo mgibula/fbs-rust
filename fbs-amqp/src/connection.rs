@@ -1,4 +1,4 @@
-use std::cell::{Cell, RefCell, Ref};
+use std::cell::{Cell, RefCell};
 use std::cmp::min;
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;

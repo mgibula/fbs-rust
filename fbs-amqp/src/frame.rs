@@ -2,7 +2,7 @@ use super::defines::PROTOCOL_HEADER;
 use std::{collections::HashMap, string::FromUtf8Error};
 use thiserror::Error;
 
-pub(crate) struct AmqpProtocolHeader { }
+pub(super) struct AmqpProtocolHeader;
 
 impl AmqpProtocolHeader {
     pub fn new() -> Self {
