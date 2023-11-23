@@ -82,7 +82,7 @@ fn consume_test() {
 
         let counter = Rc::new(Cell::new(0));
         let counter_copy = counter.clone();
-    
+
         let consume = Box::new(move |_, _, exchange, routing_key, message: AmqpMessage| {
             assert_eq!(exchange, "");
             assert_eq!(routing_key, "test-queue-2");
@@ -95,7 +95,7 @@ fn consume_test() {
             assert_eq!(message.properties.priority, Some(2));
             assert_eq!(message.content.as_slice(), "test-content".as_bytes());
             counter_copy.set(counter_copy.get() + 1);
-        });   
+        });
 
         channel.declare_queue("test-queue-2".to_string(), AmqpQueueFlags::new().durable(true)).await?;
         channel.purge_queue("test-queue-2".to_string(), false).await?;
@@ -112,7 +112,7 @@ fn consume_test() {
         Ok(())
     });
 
-    assert!(result.is_ok());    
+    assert!(result.is_ok());
 }
 
 #[test]
@@ -137,7 +137,7 @@ fn return_test() {
         properties.message_id = Some("message id test".to_string());
         properties.priority = Some(2);
 
-        publisher.publish("".to_string(), "test-queue-3".to_string(), properties, AmqpPublishFlags::new().mandatory(true), "test-content".as_bytes())?;
+        publisher.publish("".to_string(), "test-queue-nonexisting".to_string(), properties, AmqpPublishFlags::new().mandatory(true), "test-content".as_bytes())?;
 
         let counter = Rc::new(Cell::new(0));
         let counter_copy = counter.clone();
@@ -154,7 +154,7 @@ fn return_test() {
             assert_eq!(message.properties.priority, Some(2));
             assert_eq!(message.content.as_slice(), "test-content".as_bytes());
             counter_copy.set(counter_copy.get() + 1);
-        });   
+        });
 
         channel.set_on_return(Some(Box::new(return_cb)));
 
@@ -167,7 +167,7 @@ fn return_test() {
         Ok(())
     });
 
-    assert!(result.is_ok());    
+    assert!(result.is_ok());
 }
 
 
@@ -228,5 +228,5 @@ fn get_test() {
         Ok(())
     });
 
-    assert!(result.is_ok());    
+    assert!(result.is_ok());
 }
