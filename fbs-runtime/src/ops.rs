@@ -44,7 +44,7 @@ impl<T> AsyncResultEx for Result<T, (SystemError, Vec<u8>)> {
     fn timed_out(&self) -> bool {
         self.as_ref().is_err_and(|e| e.0.timed_out())
     }
-} 
+}
 
 pub struct ResultSuccess;
 
@@ -54,6 +54,20 @@ impl AsyncOpResult for ResultSuccess {
     fn get_result(cqe: IoUringCQE, _params: ReactorOpParameters) -> Self::Output {
         if cqe.result != 0 {
             println!("Ignoring CQE result of {}", cqe.result);
+        }
+    }
+}
+
+pub struct ResultSuccessSleep;
+
+impl AsyncOpResult for ResultSuccessSleep {
+    type Output = ();
+
+    fn get_result(cqe: IoUringCQE, _params: ReactorOpParameters) -> Self::Output {
+        match cqe.result {
+            result if result == 0 => (),
+            result if result == -libc::ETIME => (),
+            result => println!("Ignoring CQE result of {}", result),
         }
     }
 }
@@ -172,7 +186,7 @@ pub type AsyncReadStruct<T> = AsyncOp::<ResultStruct<T>>;
 pub type AsyncWrite = AsyncOp::<ResultBuffer>;
 pub type AsyncAccept = AsyncOp::<ResultSocket>;
 pub type AsyncConnect = AsyncOp::<ResultErrno>;
-pub type AsyncTimeout = AsyncOp::<ResultSuccess>;
+pub type AsyncTimeout = AsyncOp::<ResultSuccessSleep>;
 pub type AsyncTimeoutWithResult = AsyncOp::<ResultErrnoTimeout>;
 pub type AsyncCancel = AsyncOp::<ResultErrno>;
 pub type AsyncPoll = AsyncOp::<ResultErrno>;
