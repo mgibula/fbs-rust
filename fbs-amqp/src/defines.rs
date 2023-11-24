@@ -3,7 +3,7 @@ pub const PROTOCOL_HEADER: &[u8] = b"AMQP\x00\x00\x09\x01";
 pub const AMQP_FRAME_TYPE_METHOD: u8            = 1;
 pub const AMQP_FRAME_TYPE_HEADER: u8            = 2;
 pub const AMQP_FRAME_TYPE_CONTENT: u8           = 3;
-pub const AMQP_FRAME_TYPE_HEARTBEAT: u8         = 4;
+pub const AMQP_FRAME_TYPE_HEARTBEAT: u8         = 8;    // rabbitmq uses 8
 
 pub const AMQP_CLASS_CONNECTION: u16            = 10;
 pub const AMQP_CLASS_CHANNEL: u16               = 20;

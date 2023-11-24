@@ -19,6 +19,7 @@ impl<'buffer> AmqpFrameReader<'buffer> {
             AMQP_FRAME_TYPE_METHOD => Ok(AmqpFrame { channel, payload: AmqpFramePayload::Method(self.read_method_frame()?) }),
             AMQP_FRAME_TYPE_HEADER => Ok(AmqpFrame { channel, payload: self.read_header_frame()? }),
             AMQP_FRAME_TYPE_CONTENT => Ok(AmqpFrame { channel, payload: self.read_content_frame()? }),
+            AMQP_FRAME_TYPE_HEARTBEAT => Ok(AmqpFrame { channel, payload: AmqpFramePayload::Heartbeat() }),
             _ => Err(AmqpFrameError::InvalidFrameType(frame_type)),
         }
     }

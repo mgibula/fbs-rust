@@ -14,7 +14,7 @@ impl FrameWriter {
             AmqpFramePayload::Method(_) => write_u8(&mut result, AMQP_FRAME_TYPE_METHOD),
             AmqpFramePayload::Header(_, _, _) => write_u8(&mut result, AMQP_FRAME_TYPE_HEADER),
             AmqpFramePayload::Content(_) => write_u8(&mut result, AMQP_FRAME_TYPE_CONTENT),
-            _ => (),
+            AmqpFramePayload::Heartbeat() => write_u8(&mut result, AMQP_FRAME_TYPE_HEARTBEAT),
         }
 
         write_u16(&mut result, frame.channel);
@@ -32,7 +32,7 @@ impl FrameWriter {
             AmqpFramePayload::Method(method) => FrameWriter::serialize_method_frame(method),
             AmqpFramePayload::Header(class, size, properties) => FrameWriter::serialize_header_frame(*class, *size, properties),
             AmqpFramePayload::Content(data) => FrameWriter::serialize_content_frame(data),
-            _ => panic!("Attempting to write unsupported frame type"),
+            AmqpFramePayload::Heartbeat() => Vec::new(),
         }
     }
 

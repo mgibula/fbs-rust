@@ -27,7 +27,7 @@ pub enum AmqpFramePayload {
     Method(AmqpMethod),
     Header(u16, u64, AmqpBasicProperties),
     Content(Vec<u8>),
-    Heartbeat(AmqpHeartbeatFrame),
+    Heartbeat(),
 }
 
 #[derive(Debug, Clone)]
@@ -79,9 +79,4 @@ pub enum AmqpMethod {
     BasicNack(u64, u8),                                                             // delivery-tag, multiple, requeue
     ConfirmSelect(bool),                                                            // no-wait
     ConfirmSelectOk(),
-}
-
-#[derive(Debug, Clone)]
-pub struct AmqpHeartbeatFrame {
-
 }

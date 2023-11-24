@@ -3,11 +3,12 @@ use std::cmp::min;
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 use std::fmt::{Debug, Formatter};
+use std::time::Duration;
 
 use fbs_library::socket::{Socket, SocketDomain, SocketType, SocketFlags};
 use fbs_library::indexed_list::IndexedList;
 use fbs_runtime::async_utils::{AsyncSignal, AsyncChannelRx, AsyncChannelTx, async_channel_create};
-use fbs_runtime::{async_connect, async_write, async_read_into, async_spawn};
+use fbs_runtime::{async_connect, async_write, async_read_into, async_spawn, async_sleep};
 use fbs_runtime::resolver::resolve_address;
 use fbs_executor::TaskHandle;
 
@@ -219,6 +220,7 @@ pub(super) struct AmqpConnectionInternal {
     channels: RefCell<IndexedList<Rc<AmqpChannelInternals>>>,
     read_handler: Cell<TaskHandle<()>>,
     write_handler: Cell<TaskHandle<()>>,
+    heartbeat_handler: Cell<TaskHandle<()>>,
     signal: AsyncSignal,
     max_channels: Cell<u16>,
     heartbeat: Cell<u16>,
@@ -248,6 +250,7 @@ impl AmqpConnectionInternal {
             writer_queue: tx,
             read_handler: Cell::new(TaskHandle::default()),
             write_handler: Cell::new(TaskHandle::default()),
+            heartbeat_handler: Cell::new(TaskHandle::default()),
             signal: AsyncSignal::new(),
             max_channels: Cell::new(100),
             max_frame_size: Cell::new(4096),
@@ -309,18 +312,20 @@ impl AmqpConnectionInternal {
             AmqpFramePayload::Method(AmqpMethod::ConnectionClose(code, reason, class, method)) => {
                 self.mark_connection_closed(AmqpConnectionError::ConnectionClosedByServer(code, reason, class, method), false);
                 self.signal.signal();
+                Ok(())
             },
             AmqpFramePayload::Method(AmqpMethod::ConnectionCloseOk()) => {
                 self.mark_connection_closed(AmqpConnectionError::ConnectionClosed, false);
                 self.signal.signal();
+                Ok(())
             },
-            _ => (),
+            AmqpFramePayload::Heartbeat() => Ok(()),
+            _ => Err(AmqpConnectionError::ProtocolError("Unexpected connection frame")),
         }
-
-        Ok(())
     }
 
     fn mark_connection_closed(&self, error: AmqpConnectionError, send_close_frame: bool) {
+        self.heartbeat_handler.take().cancel();
         if self.last_error.borrow().is_none() {
             *self.last_error.borrow_mut() = Some(error.clone());
             if send_close_frame {
@@ -421,6 +426,23 @@ impl AmqpConnectionInternal {
     }
 
     fn start_io_handler(&self, mut writer: AmqpConnectionWriter, writer_channel: AsyncChannelRx<Option<AmqpFrame>>, mut reader: AmqpConnectionReader, connection: Rc<AmqpConnectionInternal>) {
+
+        let heartbeat = self.heartbeat.get();
+        let heartbeat_writer = writer_channel.tx();
+
+        self.heartbeat_handler.set(async_spawn(async move {
+            let interval = Duration::new(heartbeat as u64, 0);
+
+            loop {
+                let frame = AmqpFrame {
+                    channel: 0,
+                    payload: AmqpFramePayload::Heartbeat(),
+                };
+
+                heartbeat_writer.send(Some(frame));
+                async_sleep(interval).await;
+            }
+        }));
 
         self.read_handler.set(async_spawn(async move {
             while connection.last_error.borrow().is_none() {
