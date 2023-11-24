@@ -207,8 +207,6 @@ impl AmqpConnectionWriter {
             Err((error, _)) => return Err(AmqpConnectionError::WriteError(error)),
         }
 
-        dbg!(&frame);
-
         Ok(())
     }
 }
@@ -402,7 +400,6 @@ impl AmqpConnectionInternal {
             _ => (),
         }
 
-        dbg!(&frame);
         let response = AmqpFrame {
             channel: 0,
             payload: AmqpFramePayload::Method(AmqpMethod::ConnectionTuneOk(self.max_channels.get(), self.max_frame_size.get(), self.heartbeat.get())),
@@ -449,7 +446,6 @@ impl AmqpConnectionInternal {
                 let frame = reader.read_frame().await;
                 match frame {
                     Ok(frame) => {
-                        dbg!(&frame);
                         let handle_result = if frame.channel > 0 {
                             connection.handle_channel_frame(frame)
                         } else {
