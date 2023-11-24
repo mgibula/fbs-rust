@@ -52,8 +52,10 @@ impl AsyncOpResult for ResultSuccess {
     type Output = ();
 
     fn get_result(cqe: IoUringCQE, _params: ReactorOpParameters) -> Self::Output {
-        if cqe.result != 0 {
-            println!("Ignoring CQE result of {}", cqe.result);
+        match cqe.result {
+            result if result == 0 => (),
+            result if result == -libc::ECANCELED => (),
+            result => println!("Ignoring CQE result of {}", result),
         }
     }
 }
@@ -67,6 +69,7 @@ impl AsyncOpResult for ResultSuccessSleep {
         match cqe.result {
             result if result == 0 => (),
             result if result == -libc::ETIME => (),
+            result if result == -libc::ECANCELED => (),
             result => println!("Ignoring CQE result of {}", result),
         }
     }
