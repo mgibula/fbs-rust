@@ -85,16 +85,18 @@ struct AmqpConnectionReader {
     fd: Rc<Socket>,
     read_buffer: Vec<u8>,
     read_offset: usize,
+    frame_buffer: Vec<u8>,
 }
 
 impl AmqpConnectionReader {
     fn new(fd: Rc<Socket>) -> Self {
-        Self { fd, read_buffer: Vec::with_capacity(4096), read_offset: 0 }
+        Self { fd, read_buffer: Vec::with_capacity(4096), read_offset: 0, frame_buffer: Vec::with_capacity(4096) }
     }
 
     fn change_capacity(&mut self, size: usize) {
         assert!(self.read_buffer.capacity() <= size);
         self.read_buffer.reserve(size - self.read_buffer.capacity());
+        self.frame_buffer.reserve(size - self.frame_buffer.capacity());
     }
 
     async fn fill_buffer(&mut self) -> Result<usize, AmqpConnectionError> {
@@ -159,19 +161,33 @@ impl AmqpConnectionReader {
         let channel = self.read_u16().await?;
         let payload_size = self.read_u32().await? as usize;
 
-        let mut payload = Vec::with_capacity(payload_size);
-        payload.resize(payload_size, b'\x00');
+        let mut frame_buffer = std::mem::take(&mut self.frame_buffer);
+        reserve_buffer_size(&mut frame_buffer, payload_size);
 
-        self.read_bytes(&mut payload).await?;
+        self.read_bytes(&mut frame_buffer).await?;
 
         let frame_end = self.read_u8().await?;
         if frame_end != b'\xCE' {
             return Err(AmqpConnectionError::FrameEndInvalid);
         }
 
-        let mut reader = AmqpFrameReader::new(&payload);
-        Ok(reader.read_frame(frame_type, channel)?)
+        let mut reader = AmqpFrameReader::new(&frame_buffer);
+        let result = reader.read_frame(frame_type, channel);
+        self.frame_buffer = frame_buffer;
+
+        match result {
+            Ok(frame) => Ok(frame),
+            Err(error) => Err(AmqpConnectionError::FrameError(error))
+        }
     }
+}
+
+fn reserve_buffer_size(buffer: &mut Vec<u8>, size: usize) {
+    if buffer.capacity() < size {
+        buffer.reserve(size - buffer.capacity());
+    }
+
+    buffer.resize(size, 0);
 }
 
 struct AmqpConnectionWriter {
