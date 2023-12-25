@@ -9,37 +9,51 @@ pub(super) struct FrameWriter;
 impl FrameWriter {
     pub(super) fn write_frame(frame: AmqpFrame, result: &mut Vec<u8>) {
         match &frame.payload {
-            AmqpFramePayload::Method(_) => write_u8(result, AMQP_FRAME_TYPE_METHOD),
-            AmqpFramePayload::Header(_, _, _) => write_u8(result, AMQP_FRAME_TYPE_HEADER),
-            AmqpFramePayload::Content(_) => write_u8(result, AMQP_FRAME_TYPE_CONTENT),
-            AmqpFramePayload::Heartbeat() => write_u8(result, AMQP_FRAME_TYPE_HEARTBEAT),
+            AmqpFramePayload::Method(_)         => write_u8(result, AMQP_FRAME_TYPE_METHOD),
+            AmqpFramePayload::Header(_, _, _)   => write_u8(result, AMQP_FRAME_TYPE_HEADER),
+            AmqpFramePayload::Content(_)        => write_u8(result, AMQP_FRAME_TYPE_CONTENT),
+            AmqpFramePayload::Heartbeat()       => write_u8(result, AMQP_FRAME_TYPE_HEARTBEAT),
         }
 
         write_u16(result, frame.channel);
 
-        let payload = FrameWriter::serialize_frame(frame);
-        write_u32(result, payload.len() as u32);
-        write_bytes(result, &payload);
+        let size_offset = result.len();
+        write_u32(result, 0);   // placeholde for frame size
+
+        FrameWriter::serialize_frame(frame, result);
+
+        // fill the real size
+        let payload_size = (result.len() - size_offset - 4) as u32; // -4 for frame size placeholder
+        result[size_offset .. size_offset + 4].copy_from_slice(&payload_size.to_be_bytes());
+
+        // write frame trailing
         write_u8(result, b'\xCE');
     }
 
-    fn serialize_frame(frame: AmqpFrame) -> Vec<u8> {
+    fn serialize_frame(frame: AmqpFrame, target: &mut Vec<u8>) {
         match frame.payload {
-            AmqpFramePayload::Method(method) => FrameWriter::serialize_method_frame(&method),
-            AmqpFramePayload::Header(class, size, properties) => FrameWriter::serialize_header_frame(class, size, &properties),
-            AmqpFramePayload::Content(data) => data,
-            AmqpFramePayload::Heartbeat() => Vec::new(),
+            AmqpFramePayload::Method(method) => FrameWriter::serialize_method_frame(target, &method),
+            AmqpFramePayload::Header(class, size, properties) => FrameWriter::serialize_header_frame(target, class, size, &properties),
+            AmqpFramePayload::Content(data) => write_bytes(target, &data),
+            AmqpFramePayload::Heartbeat() => (),
         }
     }
 
-    fn serialize_header_frame(class_id: u16, size: u64, properties: &AmqpBasicProperties) -> Vec<u8> {
+    fn serialize_header_frame(target: &mut Vec<u8>, class_id: u16, size: u64, properties: &AmqpBasicProperties) {
+        write_u16(target, class_id);
+        write_u16(target, 0);
+        write_u64(target, size);
+
+        // properties_mask - will be filled later
+        let mask_offset = target.len();
+        write_u16(target, 0);
+
         let mut properties_mask: u16 = 0;
-        let mut buffer = Vec::new();
         match &properties.content_type {
             None => (),
             Some(value) => {
                 properties_mask |= 1 << AMQP_BASIC_PROPERTY_CONTENT_TYPE_BIT;
-                write_short_string(&mut buffer, value);
+                write_short_string(target, value);
             }
         }
 
@@ -47,7 +61,7 @@ impl FrameWriter {
             None => (),
             Some(value) => {
                 properties_mask |= 1 << AMQP_BASIC_PROPERTY_CONTENT_ENCODING_BIT;
-                write_short_string(&mut buffer, value);
+                write_short_string(target, value);
             }
         }
 
@@ -55,7 +69,7 @@ impl FrameWriter {
             None => (),
             Some(value) => {
                 properties_mask |= 1 << AMQP_BASIC_PROPERTY_HEADERS_BIT;
-                write_table(&mut buffer, value);
+                write_table(target, value);
             }
         }
 
@@ -63,7 +77,7 @@ impl FrameWriter {
             None => (),
             Some(value) => {
                 properties_mask |= 1 << AMQP_BASIC_PROPERTY_DELIVERY_MNODE_BIT;
-                write_u8(&mut buffer, *value);
+                write_u8(target, *value);
             }
         }
 
@@ -71,7 +85,7 @@ impl FrameWriter {
             None => (),
             Some(value) => {
                 properties_mask |= 1 << AMQP_BASIC_PROPERTY_PRIORITY_BIT;
-                write_u8(&mut buffer, *value);
+                write_u8(target, *value);
             }
         }
 
@@ -79,7 +93,7 @@ impl FrameWriter {
             None => (),
             Some(value) => {
                 properties_mask |= 1 << AMQP_BASIC_PROPERTY_CORRELATION_ID_BIT;
-                write_short_string(&mut buffer, value);
+                write_short_string(target, value);
             }
         }
 
@@ -87,7 +101,7 @@ impl FrameWriter {
             None => (),
             Some(value) => {
                 properties_mask |= 1 << AMQP_BASIC_PROPERTY_REPLY_TO_BIT;
-                write_short_string(&mut buffer, value);
+                write_short_string(target, value);
             }
         }
 
@@ -95,7 +109,7 @@ impl FrameWriter {
             None => (),
             Some(value) => {
                 properties_mask |= 1 << AMQP_BASIC_PROPERTY_EXPIRATION_BIT;
-                write_short_string(&mut buffer, value);
+                write_short_string(target, value);
             }
         }
 
@@ -103,7 +117,7 @@ impl FrameWriter {
             None => (),
             Some(value) => {
                 properties_mask |= 1 << AMQP_BASIC_PROPERTY_MESSAGE_ID_BIT;
-                write_short_string(&mut buffer, value);
+                write_short_string(target, value);
             }
         }
 
@@ -111,7 +125,7 @@ impl FrameWriter {
             None => (),
             Some(value) => {
                 properties_mask |= 1 << AMQP_BASIC_PROPERTY_TIMESTAMP_BIT;
-                write_u64(&mut buffer, *value);
+                write_u64(target, *value);
             }
         }
 
@@ -119,7 +133,7 @@ impl FrameWriter {
             None => (),
             Some(value) => {
                 properties_mask |= 1 << AMQP_BASIC_PROPERTY_TYPE_BIT;
-                write_short_string(&mut buffer, value);
+                write_short_string(target, value);
             }
         }
 
@@ -127,7 +141,7 @@ impl FrameWriter {
             None => (),
             Some(value) => {
                 properties_mask |= 1 << AMQP_BASIC_PROPERTY_USER_ID_BIT;
-                write_short_string(&mut buffer, value);
+                write_short_string(target, value);
             }
         }
 
@@ -135,7 +149,7 @@ impl FrameWriter {
             None => (),
             Some(value) => {
                 properties_mask |= 1 << AMQP_BASIC_PROPERTY_APP_ID_BIT;
-                write_short_string(&mut buffer, value);
+                write_short_string(target, value);
             }
         }
 
@@ -143,210 +157,201 @@ impl FrameWriter {
             None => (),
             Some(value) => {
                 properties_mask |= 1 << AMQP_BASIC_PROPERTY_CLUSTER_ID_BIT;
-                write_short_string(&mut buffer, value);
+                write_short_string(target, value);
             }
         }
 
-        let mut result = Vec::new();
-        write_u16(&mut result, class_id);
-        write_u16(&mut result, 0);
-        write_u64(&mut result, size);
-        write_u16(&mut result, properties_mask);
-        write_bytes(&mut result, &buffer);
-
-        result
+        // fill the properties_mask
+        target[mask_offset .. mask_offset + 2].copy_from_slice(&properties_mask.to_be_bytes());
     }
 
-    fn serialize_method_frame(method: &AmqpMethod) -> Vec<u8> {
-        let mut result = Vec::new();
+    fn serialize_method_frame(target: &mut Vec<u8>, method: &AmqpMethod) {
         match method {
             AmqpMethod::ConnectionStartOk(properties, mechanism, response, locale) => {
-                write_u16(&mut result, AMQP_CLASS_CONNECTION);
-                write_u16(&mut result, AMQP_METHOD_CONNECTION_START_OK);
-                write_table(&mut result, properties);
-                write_short_string(&mut result, mechanism);
-                write_long_string(&mut result, response);
-                write_short_string(&mut result, locale);
+                write_u16(target, AMQP_CLASS_CONNECTION);
+                write_u16(target, AMQP_METHOD_CONNECTION_START_OK);
+                write_table(target, properties);
+                write_short_string(target, mechanism);
+                write_long_string(target, response);
+                write_short_string(target, locale);
             },
             AmqpMethod::ConnectionTuneOk(channel_max, frame_max, heartbeat) => {
-                write_u16(&mut result, AMQP_CLASS_CONNECTION);
-                write_u16(&mut result, AMQP_METHOD_CONNECTION_TUNE_OK);
-                write_u16(&mut result, *channel_max);
-                write_u32(&mut result, *frame_max);
-                write_u16(&mut result, *heartbeat);
+                write_u16(target, AMQP_CLASS_CONNECTION);
+                write_u16(target, AMQP_METHOD_CONNECTION_TUNE_OK);
+                write_u16(target, *channel_max);
+                write_u32(target, *frame_max);
+                write_u16(target, *heartbeat);
             },
             AmqpMethod::ConnectionOpen(vhost) => {
-                write_u16(&mut result, AMQP_CLASS_CONNECTION);
-                write_u16(&mut result, AMQP_METHOD_CONNECTION_OPEN);
-                write_short_string(&mut result, vhost);
-                write_short_string(&mut result, "");    // deprecated but necessary
-                write_u8(&mut result, 0);         // deprecated but necessary
+                write_u16(target, AMQP_CLASS_CONNECTION);
+                write_u16(target, AMQP_METHOD_CONNECTION_OPEN);
+                write_short_string(target, vhost);
+                write_short_string(target, "");    // deprecated but necessary
+                write_u8(target, 0);         // deprecated but necessary
             },
             AmqpMethod::ConnectionClose(reply_code, reply_text, class_id, method_id) => {
-                write_u16(&mut result, AMQP_CLASS_CONNECTION);
-                write_u16(&mut result, AMQP_METHOD_CONNECTION_CLOSE);
-                write_u16(&mut result, *reply_code);
-                write_short_string(&mut result, reply_text);
-                write_u16(&mut result, *class_id);
-                write_u16(&mut result, *method_id);
+                write_u16(target, AMQP_CLASS_CONNECTION);
+                write_u16(target, AMQP_METHOD_CONNECTION_CLOSE);
+                write_u16(target, *reply_code);
+                write_short_string(target, reply_text);
+                write_u16(target, *class_id);
+                write_u16(target, *method_id);
             },
             AmqpMethod::ConnectionCloseOk() => {
-                write_u16(&mut result, AMQP_CLASS_CONNECTION);
-                write_u16(&mut result, AMQP_METHOD_CONNECTION_CLOSE_OK);
+                write_u16(target, AMQP_CLASS_CONNECTION);
+                write_u16(target, AMQP_METHOD_CONNECTION_CLOSE_OK);
             },
             AmqpMethod::ChannelOpen() => {
-                write_u16(&mut result, AMQP_CLASS_CHANNEL);
-                write_u16(&mut result, AMQP_METHOD_CHANNEL_OPEN);
-                write_short_string(&mut result, "");    // deprecated but necessary
+                write_u16(target, AMQP_CLASS_CHANNEL);
+                write_u16(target, AMQP_METHOD_CHANNEL_OPEN);
+                write_short_string(target, "");    // deprecated but necessary
             },
             AmqpMethod::ChannelClose(reply_code, reply_text, class_id, method_id) => {
-                write_u16(&mut result, AMQP_CLASS_CHANNEL);
-                write_u16(&mut result, AMQP_METHOD_CHANNEL_CLOSE);
-                write_u16(&mut result, *reply_code);
-                write_short_string(&mut result, reply_text);
-                write_u16(&mut result, *class_id);
-                write_u16(&mut result, *method_id);
+                write_u16(target, AMQP_CLASS_CHANNEL);
+                write_u16(target, AMQP_METHOD_CHANNEL_CLOSE);
+                write_u16(target, *reply_code);
+                write_short_string(target, reply_text);
+                write_u16(target, *class_id);
+                write_u16(target, *method_id);
             },
             AmqpMethod::ChannelCloseOk() => {
-                write_u16(&mut result, AMQP_CLASS_CHANNEL);
-                write_u16(&mut result, AMQP_METHOD_CHANNEL_CLOSE_OK);
+                write_u16(target, AMQP_CLASS_CHANNEL);
+                write_u16(target, AMQP_METHOD_CHANNEL_CLOSE_OK);
             },
             AmqpMethod::ChannelFlow(active) => {
-                write_u16(&mut result, AMQP_CLASS_CHANNEL);
-                write_u16(&mut result, AMQP_METHOD_CHANNEL_FLOW);
-                write_u8(&mut result, (*active) as u8);
+                write_u16(target, AMQP_CLASS_CHANNEL);
+                write_u16(target, AMQP_METHOD_CHANNEL_FLOW);
+                write_u8(target, (*active) as u8);
             },
             AmqpMethod::ChannelFlowOk(active) => {
-                write_u16(&mut result, AMQP_CLASS_CHANNEL);
-                write_u16(&mut result, AMQP_METHOD_CHANNEL_FLOW_OK);
-                write_u8(&mut result, (*active) as u8);
+                write_u16(target, AMQP_CLASS_CHANNEL);
+                write_u16(target, AMQP_METHOD_CHANNEL_FLOW_OK);
+                write_u8(target, (*active) as u8);
             },
             AmqpMethod::ExchangeDeclare(name, exchange_type, flags, arguments) => {
-                write_u16(&mut result, AMQP_CLASS_EXCHANGE);
-                write_u16(&mut result, AMQP_METHOD_EXCHANGE_DECLARE);
-                write_u16(&mut result, 0);      // deprecated
-                write_short_string(&mut result, &name);
-                write_short_string(&mut result, &exchange_type);
-                write_u8(&mut result, *flags);
-                write_table(&mut result, arguments);
+                write_u16(target, AMQP_CLASS_EXCHANGE);
+                write_u16(target, AMQP_METHOD_EXCHANGE_DECLARE);
+                write_u16(target, 0);      // deprecated
+                write_short_string(target, &name);
+                write_short_string(target, &exchange_type);
+                write_u8(target, *flags);
+                write_table(target, arguments);
             },
             AmqpMethod::ExchangeDelete(name, flags) => {
-                write_u16(&mut result, AMQP_CLASS_EXCHANGE);
-                write_u16(&mut result, AMQP_METHOD_EXCHANGE_DELETE);
-                write_u16(&mut result, 0);      // deprecated
-                write_short_string(&mut result, &name);
-                write_u8(&mut result, *flags);
+                write_u16(target, AMQP_CLASS_EXCHANGE);
+                write_u16(target, AMQP_METHOD_EXCHANGE_DELETE);
+                write_u16(target, 0);      // deprecated
+                write_short_string(target, &name);
+                write_u8(target, *flags);
             },
             AmqpMethod::QueueDeclare(name, flags, arguments) => {
-                write_u16(&mut result, AMQP_CLASS_QUEUE);
-                write_u16(&mut result, AMQP_METHOD_QUEUE_DECLARE);
-                write_i16(&mut result, 0);
-                write_short_string(&mut result, name);
-                write_u8(&mut result, *flags);
-                write_table(&mut result, arguments);
+                write_u16(target, AMQP_CLASS_QUEUE);
+                write_u16(target, AMQP_METHOD_QUEUE_DECLARE);
+                write_i16(target, 0);
+                write_short_string(target, name);
+                write_u8(target, *flags);
+                write_table(target, arguments);
             },
             AmqpMethod::QueueBind(name, exchange, routing_key, flags, arguments) => {
-                write_u16(&mut result, AMQP_CLASS_QUEUE);
-                write_u16(&mut result, AMQP_METHOD_QUEUE_BIND);
-                write_u16(&mut result, 0);      // deprecated
-                write_short_string(&mut result, name);
-                write_short_string(&mut result, exchange);
-                write_short_string(&mut result, routing_key);
-                write_u8(&mut result, *flags);
-                write_table(&mut result, arguments);
+                write_u16(target, AMQP_CLASS_QUEUE);
+                write_u16(target, AMQP_METHOD_QUEUE_BIND);
+                write_u16(target, 0);      // deprecated
+                write_short_string(target, name);
+                write_short_string(target, exchange);
+                write_short_string(target, routing_key);
+                write_u8(target, *flags);
+                write_table(target, arguments);
             },
             AmqpMethod::QueueUnbind(name, exchange, routing_key, arguments) => {
-                write_u16(&mut result, AMQP_CLASS_QUEUE);
-                write_u16(&mut result, AMQP_METHOD_QUEUE_UNBIND);
-                write_u16(&mut result, 0);      // deprecated
-                write_short_string(&mut result, name);
-                write_short_string(&mut result, exchange);
-                write_short_string(&mut result, routing_key);
-                write_table(&mut result, arguments);
+                write_u16(target, AMQP_CLASS_QUEUE);
+                write_u16(target, AMQP_METHOD_QUEUE_UNBIND);
+                write_u16(target, 0);      // deprecated
+                write_short_string(target, name);
+                write_short_string(target, exchange);
+                write_short_string(target, routing_key);
+                write_table(target, arguments);
             },
             AmqpMethod::QueuePurge(name, flags) => {
-                write_u16(&mut result, AMQP_CLASS_QUEUE);
-                write_u16(&mut result, AMQP_METHOD_QUEUE_PURGE);
-                write_u16(&mut result, 0);      // deprecated
-                write_short_string(&mut result, name);
-                write_u8(&mut result, *flags);
+                write_u16(target, AMQP_CLASS_QUEUE);
+                write_u16(target, AMQP_METHOD_QUEUE_PURGE);
+                write_u16(target, 0);      // deprecated
+                write_short_string(target, name);
+                write_u8(target, *flags);
             },
             AmqpMethod::QueueDelete(name, flags) => {
-                write_u16(&mut result, AMQP_CLASS_QUEUE);
-                write_u16(&mut result, AMQP_METHOD_QUEUE_DELETE);
-                write_u16(&mut result, 0);      // deprecated
-                write_short_string(&mut result, name);
-                write_u8(&mut result, *flags);
+                write_u16(target, AMQP_CLASS_QUEUE);
+                write_u16(target, AMQP_METHOD_QUEUE_DELETE);
+                write_u16(target, 0);      // deprecated
+                write_short_string(target, name);
+                write_u8(target, *flags);
             },
             AmqpMethod::BasicQos(size, count, global) => {
-                write_u16(&mut result, AMQP_CLASS_BASIC);
-                write_u16(&mut result, AMQP_METHOD_BASIC_QOS);
-                write_i32(&mut result, *size);
-                write_i16(&mut result, *count);
-                write_u8(&mut result, (*global) as u8);
+                write_u16(target, AMQP_CLASS_BASIC);
+                write_u16(target, AMQP_METHOD_BASIC_QOS);
+                write_i32(target, *size);
+                write_i16(target, *count);
+                write_u8(target, (*global) as u8);
             },
             AmqpMethod::BasicConsume(queue, tag, flags, arguments) => {
-                write_u16(&mut result, AMQP_CLASS_BASIC);
-                write_u16(&mut result, AMQP_METHOD_BASIC_CONSUME);
-                write_u16(&mut result, 0);      // deprecated
-                write_short_string(&mut result, queue);
-                write_short_string(&mut result, tag);
-                write_u8(&mut result, *flags);
-                write_table(&mut result, arguments);
+                write_u16(target, AMQP_CLASS_BASIC);
+                write_u16(target, AMQP_METHOD_BASIC_CONSUME);
+                write_u16(target, 0);      // deprecated
+                write_short_string(target, queue);
+                write_short_string(target, tag);
+                write_u8(target, *flags);
+                write_table(target, arguments);
             },
             AmqpMethod::BasicCancel(tag, flags) => {
-                write_u16(&mut result, AMQP_CLASS_BASIC);
-                write_u16(&mut result, AMQP_METHOD_BASIC_CANCEL);
-                write_short_string(&mut result, tag);
-                write_u8(&mut result, *flags);
+                write_u16(target, AMQP_CLASS_BASIC);
+                write_u16(target, AMQP_METHOD_BASIC_CANCEL);
+                write_short_string(target, tag);
+                write_u8(target, *flags);
             },
             AmqpMethod::BasicPublish(exchange, routing_key, flags) => {
-                write_u16(&mut result, AMQP_CLASS_BASIC);
-                write_u16(&mut result, AMQP_METHOD_BASIC_PUBLISH);
-                write_u16(&mut result, 0);      // deprecated
-                write_short_string(&mut result, exchange);
-                write_short_string(&mut result, routing_key);
-                write_u8(&mut result, *flags);
+                write_u16(target, AMQP_CLASS_BASIC);
+                write_u16(target, AMQP_METHOD_BASIC_PUBLISH);
+                write_u16(target, 0);      // deprecated
+                write_short_string(target, exchange);
+                write_short_string(target, routing_key);
+                write_u8(target, *flags);
             },
             AmqpMethod::BasicAck(delivery_tag, multiple) => {
-                write_u16(&mut result, AMQP_CLASS_BASIC);
-                write_u16(&mut result, AMQP_METHOD_BASIC_ACK);
-                write_u64(&mut result, *delivery_tag);
-                write_u8(&mut result, (*multiple) as u8);
+                write_u16(target, AMQP_CLASS_BASIC);
+                write_u16(target, AMQP_METHOD_BASIC_ACK);
+                write_u64(target, *delivery_tag);
+                write_u8(target, (*multiple) as u8);
             },
             AmqpMethod::BasicGet(queue, no_ack) => {
-                write_u16(&mut result, AMQP_CLASS_BASIC);
-                write_u16(&mut result, AMQP_METHOD_BASIC_GET);
-                write_u16(&mut result, 0);
-                write_short_string(&mut result, queue);
-                write_u8(&mut result, (*no_ack) as u8);
+                write_u16(target, AMQP_CLASS_BASIC);
+                write_u16(target, AMQP_METHOD_BASIC_GET);
+                write_u16(target, 0);
+                write_short_string(target, queue);
+                write_u8(target, (*no_ack) as u8);
             },
             AmqpMethod::BasicReject(delivery_tag, requeue) => {
-                write_u16(&mut result, AMQP_CLASS_BASIC);
-                write_u16(&mut result, AMQP_METHOD_BASIC_REJECT);
-                write_u64(&mut result, *delivery_tag);
-                write_u8(&mut result, (*requeue) as u8);
+                write_u16(target, AMQP_CLASS_BASIC);
+                write_u16(target, AMQP_METHOD_BASIC_REJECT);
+                write_u64(target, *delivery_tag);
+                write_u8(target, (*requeue) as u8);
             },
             AmqpMethod::BasicRecover(requeue) => {
-                write_u16(&mut result, AMQP_CLASS_BASIC);
-                write_u16(&mut result, AMQP_METHOD_BASIC_RECOVER);
-                write_u8(&mut result, (*requeue) as u8);
+                write_u16(target, AMQP_CLASS_BASIC);
+                write_u16(target, AMQP_METHOD_BASIC_RECOVER);
+                write_u8(target, (*requeue) as u8);
             },
             AmqpMethod::BasicNack(delivery_tag, flags) => {
-                write_u16(&mut result, AMQP_CLASS_BASIC);
-                write_u16(&mut result, AMQP_METHOD_BASIC_NACK);
-                write_u64(&mut result, *delivery_tag);
-                write_u8(&mut result, *flags);
+                write_u16(target, AMQP_CLASS_BASIC);
+                write_u16(target, AMQP_METHOD_BASIC_NACK);
+                write_u64(target, *delivery_tag);
+                write_u8(target, *flags);
             },
             AmqpMethod::ConfirmSelect(no_wait) => {
-                write_u16(&mut result, AMQP_CLASS_CONFIRM);
-                write_u16(&mut result, AMQP_METHOD_CONFIRM_SELECT);
-                write_u8(&mut result, (*no_wait) as u8);
+                write_u16(target, AMQP_CLASS_CONFIRM);
+                write_u16(target, AMQP_METHOD_CONFIRM_SELECT);
+                write_u8(target, (*no_wait) as u8);
             },
             _ => panic!("Attempting to write unsupported frame type"),
         }
-
-        result
     }
 }
 
@@ -407,26 +412,32 @@ fn write_long_string(buffer: &mut Vec<u8>, value: &str) {
 }
 
 fn write_table(buffer: &mut Vec<u8>, value: &HashMap<String, AmqpData>) {
-    let mut tmp = Vec::new();
+    // size placeholder, to be filled later
+    let size_offset = buffer.len();
+    write_u32(buffer, 0);
 
     value.iter().for_each(|(key, value)| {
-        write_short_string(&mut tmp, key);
-        write_value(&mut tmp, value);
+        write_short_string(buffer, key);
+        write_value(buffer, value);
     });
 
-    write_u32(buffer, tmp.len() as u32);
-    write_bytes(buffer, &tmp);
+    // fill the real size
+    let payload_size = (buffer.len() - size_offset - 4) as u32; // -4 for frame size placeholder
+    buffer[size_offset .. size_offset + 4].copy_from_slice(&payload_size.to_be_bytes());
 }
 
 fn write_array(buffer: &mut Vec<u8>, value: &Vec<AmqpData>) {
-    let mut tmp = Vec::new();
+    // size placeholder, to be filled later
+    let size_offset = buffer.len();
+    write_u32(buffer, 0);
 
     value.iter().for_each(|value| {
-        write_value(&mut tmp, value);
+        write_value(buffer, value);
     });
 
-    write_u32(buffer, tmp.len() as u32);
-    write_bytes(buffer, &tmp);
+    // fill the real size
+    let payload_size = (buffer.len() - size_offset - 4) as u32; // -4 for frame size placeholder
+    buffer[size_offset .. size_offset + 4].copy_from_slice(&payload_size.to_be_bytes());
 }
 
 fn write_value(buffer: &mut Vec<u8>, value: &AmqpData) {
