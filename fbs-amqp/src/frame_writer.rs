@@ -7,7 +7,7 @@ use super::defines::*;
 pub(super) struct FrameWriter;
 
 impl FrameWriter {
-    pub(super) fn write_frame(frame: &AmqpFrame) -> Vec<u8> {
+    pub(super) fn write_frame(frame: AmqpFrame) -> Vec<u8> {
         let mut result = Vec::new();
 
         match &frame.payload {
@@ -27,17 +27,13 @@ impl FrameWriter {
         result
     }
 
-    fn serialize_frame(frame: &AmqpFrame) -> Vec<u8> {
-        match &frame.payload {
-            AmqpFramePayload::Method(method) => FrameWriter::serialize_method_frame(method),
-            AmqpFramePayload::Header(class, size, properties) => FrameWriter::serialize_header_frame(*class, *size, properties),
-            AmqpFramePayload::Content(data) => FrameWriter::serialize_content_frame(data),
+    fn serialize_frame(frame: AmqpFrame) -> Vec<u8> {
+        match frame.payload {
+            AmqpFramePayload::Method(method) => FrameWriter::serialize_method_frame(&method),
+            AmqpFramePayload::Header(class, size, properties) => FrameWriter::serialize_header_frame(class, size, &properties),
+            AmqpFramePayload::Content(data) => data,
             AmqpFramePayload::Heartbeat() => Vec::new(),
         }
-    }
-
-    fn serialize_content_frame(data: &[u8]) -> Vec<u8> {
-        data.to_vec()
     }
 
     fn serialize_header_frame(class_id: u16, size: u64, properties: &AmqpBasicProperties) -> Vec<u8> {

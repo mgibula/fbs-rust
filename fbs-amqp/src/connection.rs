@@ -209,12 +209,12 @@ impl AmqpConnectionWriter {
             let frame = self.queue.pop_front();
             match frame {
                 None => return Ok(()),
-                Some(frame) => self.write_frame(&frame).await?,
+                Some(frame) => self.write_frame(frame).await?,
             }
         }
     }
 
-    async fn write_frame(&mut self, frame: &AmqpFrame) -> Result<(), AmqpConnectionError> {
+    async fn write_frame(&mut self, frame: AmqpFrame) -> Result<(), AmqpConnectionError> {
         let data = FrameWriter::write_frame(frame);
         let result = async_write(&self.fd, data, None).await;
 
