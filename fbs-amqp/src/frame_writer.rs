@@ -7,24 +7,20 @@ use super::defines::*;
 pub(super) struct FrameWriter;
 
 impl FrameWriter {
-    pub(super) fn write_frame(frame: AmqpFrame) -> Vec<u8> {
-        let mut result = Vec::new();
-
+    pub(super) fn write_frame(frame: AmqpFrame, result: &mut Vec<u8>) {
         match &frame.payload {
-            AmqpFramePayload::Method(_) => write_u8(&mut result, AMQP_FRAME_TYPE_METHOD),
-            AmqpFramePayload::Header(_, _, _) => write_u8(&mut result, AMQP_FRAME_TYPE_HEADER),
-            AmqpFramePayload::Content(_) => write_u8(&mut result, AMQP_FRAME_TYPE_CONTENT),
-            AmqpFramePayload::Heartbeat() => write_u8(&mut result, AMQP_FRAME_TYPE_HEARTBEAT),
+            AmqpFramePayload::Method(_) => write_u8(result, AMQP_FRAME_TYPE_METHOD),
+            AmqpFramePayload::Header(_, _, _) => write_u8(result, AMQP_FRAME_TYPE_HEADER),
+            AmqpFramePayload::Content(_) => write_u8(result, AMQP_FRAME_TYPE_CONTENT),
+            AmqpFramePayload::Heartbeat() => write_u8(result, AMQP_FRAME_TYPE_HEARTBEAT),
         }
 
-        write_u16(&mut result, frame.channel);
+        write_u16(result, frame.channel);
 
         let payload = FrameWriter::serialize_frame(frame);
-        write_u32(&mut result, payload.len() as u32);
-        write_bytes(&mut result, &payload);
-        write_u8(&mut result, b'\xCE');
-
-        result
+        write_u32(result, payload.len() as u32);
+        write_bytes(result, &payload);
+        write_u8(result, b'\xCE');
     }
 
     fn serialize_frame(frame: AmqpFrame) -> Vec<u8> {

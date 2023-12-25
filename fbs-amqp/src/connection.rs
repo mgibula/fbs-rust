@@ -190,14 +190,60 @@ fn reserve_buffer_size(buffer: &mut Vec<u8>, size: usize) {
     buffer.resize(size, 0);
 }
 
+struct WriteBufferManager {
+    size: usize,
+    max_capacity: usize,
+    buffers: VecDeque<Vec<u8>>,
+}
+
+impl WriteBufferManager {
+    fn init(size: usize, max_capacity: usize) -> Self {
+        WriteBufferManager { size, max_capacity, buffers: VecDeque::new() }
+    }
+
+    fn change_frame_size(&mut self, size: usize) {
+        if self.size == size {
+            return;
+        }
+
+        self.size = size;
+        self.buffers.iter_mut().for_each(|buffer| {
+            if buffer.capacity() < size {
+                buffer.reserve(size - buffer.capacity());
+            }
+        });
+    }
+
+    fn get_buffer(&mut self) -> Vec<u8> {
+        match self.buffers.pop_back() {
+            Some(buffer) => buffer,
+            None => Vec::with_capacity(self.size)
+        }
+    }
+
+    fn put_buffer(&mut self, mut buffer: Vec<u8>) {
+        if self.buffers.len() >= self.max_capacity {
+            return;
+        }
+
+        buffer.resize(0, 0);
+        self.buffers.push_back(buffer)
+    }
+}
+
 struct AmqpConnectionWriter {
     fd: Rc<Socket>,
     queue: VecDeque<AmqpFrame>,
+    buffers: WriteBufferManager,
 }
 
 impl AmqpConnectionWriter {
     fn new(fd: Rc<Socket>) -> Self {
-        Self { fd, queue: VecDeque::new() }
+        Self { fd, queue: VecDeque::new(), buffers: WriteBufferManager::init(4096, 10) }
+    }
+
+    fn change_frame_size(&mut self, size: usize) {
+        self.buffers.change_frame_size(size)
     }
 
     fn enqueue_frame(&mut self, frame: AmqpFrame) {
@@ -215,11 +261,12 @@ impl AmqpConnectionWriter {
     }
 
     async fn write_frame(&mut self, frame: AmqpFrame) -> Result<(), AmqpConnectionError> {
-        let data = FrameWriter::write_frame(frame);
+        let mut data = self.buffers.get_buffer();
+        FrameWriter::write_frame(frame, &mut data);
         let result = async_write(&self.fd, data, None).await;
 
         match result {
-            Ok(_) => (),
+            Ok(buffer) => self.buffers.put_buffer(buffer),
             Err((error, _)) => return Err(AmqpConnectionError::WriteError(error)),
         }
 
@@ -402,6 +449,7 @@ impl AmqpConnectionInternal {
             AmqpFramePayload::Method(AmqpMethod::ConnectionTune(channels, frame, heartbeat)) => {
                 if *frame > 0 {
                     reader.change_capacity((*frame) as usize);
+                    writer.change_frame_size((*frame) as usize);
 
                     // no real server is going to send value so small, but we want to
                     // prevent an underflow
