@@ -466,9 +466,12 @@ impl AmqpChannelInternals {
         while total_bytes_to_send > 0 {
             let bytes_in_frame = min(total_bytes_to_send, self.connection.max_frame_size.get() as usize);
 
+            let mut data_buffer = self.connection.buffers.get_buffer();
+            data_buffer.extend_from_slice(&content[..bytes_in_frame]);
+
             let frame = AmqpFrame {
                 channel: self.number.get() as u16,
-                payload: AmqpFramePayload::Content(content[..bytes_in_frame].to_vec()),
+                payload: AmqpFramePayload::Content(data_buffer),
             };
 
             self.connection.writer_queue.send(Some(frame));

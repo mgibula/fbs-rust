@@ -190,56 +190,56 @@ fn reserve_buffer_size(buffer: &mut Vec<u8>, size: usize) {
     buffer.resize(size, 0);
 }
 
-struct WriteBufferManager {
-    size: usize,
+pub(super) struct WriteBufferManager {
+    size: Cell<usize>,
     max_capacity: usize,
-    buffers: VecDeque<Vec<u8>>,
+    buffers: RefCell<VecDeque<Vec<u8>>>,
 }
 
 impl WriteBufferManager {
     fn init(size: usize, max_capacity: usize) -> Self {
-        WriteBufferManager { size, max_capacity, buffers: VecDeque::new() }
+        WriteBufferManager { size: Cell::new(size), max_capacity, buffers: RefCell::new(VecDeque::new()) }
     }
 
-    fn change_frame_size(&mut self, size: usize) {
-        if self.size == size {
+    fn change_frame_size(&self, size: usize) {
+        if self.size.get() == size {
             return;
         }
 
-        self.size = size;
-        self.buffers.iter_mut().for_each(|buffer| {
+        self.size.set(size);
+        self.buffers.borrow_mut().iter_mut().for_each(|buffer| {
             if buffer.capacity() < size {
                 buffer.reserve(size - buffer.capacity());
             }
         });
     }
 
-    fn get_buffer(&mut self) -> Vec<u8> {
-        match self.buffers.pop_back() {
+    pub(super) fn get_buffer(&self) -> Vec<u8> {
+        match self.buffers.borrow_mut().pop_back() {
             Some(buffer) => buffer,
-            None => Vec::with_capacity(self.size)
+            None => Vec::with_capacity(self.size.get())
         }
     }
 
-    fn put_buffer(&mut self, mut buffer: Vec<u8>) {
-        if self.buffers.len() >= self.max_capacity {
+    pub(super) fn put_buffer(&self, mut buffer: Vec<u8>) {
+        if self.buffers.borrow().len() >= self.max_capacity {
             return;
         }
 
         buffer.resize(0, 0);
-        self.buffers.push_back(buffer)
+        self.buffers.borrow_mut().push_back(buffer)
     }
 }
 
 struct AmqpConnectionWriter {
     fd: Rc<Socket>,
     queue: VecDeque<AmqpFrame>,
-    buffers: WriteBufferManager,
+    buffers: Rc<WriteBufferManager>,
 }
 
 impl AmqpConnectionWriter {
-    fn new(fd: Rc<Socket>) -> Self {
-        Self { fd, queue: VecDeque::new(), buffers: WriteBufferManager::init(4096, 10) }
+    fn new(fd: Rc<Socket>, buffers: Rc<WriteBufferManager>) -> Self {
+        Self { fd, queue: VecDeque::new(), buffers }
     }
 
     fn change_frame_size(&mut self, size: usize) {
@@ -261,8 +261,7 @@ impl AmqpConnectionWriter {
     }
 
     async fn write_frame(&mut self, frame: AmqpFrame) -> Result<(), AmqpConnectionError> {
-        let mut data = self.buffers.get_buffer();
-        FrameWriter::write_frame(frame, &mut data);
+        let data = FrameWriter::write_frame(frame, self.buffers.as_ref());
         let result = async_write(&self.fd, data, None).await;
 
         match result {
@@ -286,6 +285,7 @@ pub(super) struct AmqpConnectionInternal {
     max_channels: Cell<u16>,
     heartbeat: Cell<u16>,
     last_error: RefCell<Option<AmqpConnectionError>>,
+    pub buffers: Rc<WriteBufferManager>,
 }
 
 impl Debug for AmqpConnectionInternal {
@@ -317,6 +317,7 @@ impl AmqpConnectionInternal {
             max_frame_size: Cell::new(4096),
             heartbeat: Cell::new(0),
             last_error: RefCell::new(None),
+            buffers: Rc::new(WriteBufferManager::init(4096, 10)),
         }
     }
 
@@ -426,7 +427,7 @@ impl AmqpConnectionInternal {
         }
 
         let mut reader = AmqpConnectionReader::new(self.fd.clone());
-        let mut writer = AmqpConnectionWriter::new(self.fd.clone());
+        let mut writer = AmqpConnectionWriter::new(self.fd.clone(), self.buffers.clone());
 
         let _ = reader.read_frame().await?;
 

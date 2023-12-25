@@ -1,40 +1,48 @@
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use super::{AmqpData, AmqpBasicProperties};
+use super::connection::WriteBufferManager;
 use super::frame::{AmqpFrame, AmqpFramePayload, AmqpMethod};
 use super::defines::*;
 
 pub(super) struct FrameWriter;
 
 impl FrameWriter {
-    pub(super) fn write_frame(frame: AmqpFrame, result: &mut Vec<u8>) {
+    pub(super) fn write_frame(frame: AmqpFrame, buffers: &WriteBufferManager) -> Vec<u8> {
+        let mut result = buffers.get_buffer();
         match &frame.payload {
-            AmqpFramePayload::Method(_)         => write_u8(result, AMQP_FRAME_TYPE_METHOD),
-            AmqpFramePayload::Header(_, _, _)   => write_u8(result, AMQP_FRAME_TYPE_HEADER),
-            AmqpFramePayload::Content(_)        => write_u8(result, AMQP_FRAME_TYPE_CONTENT),
-            AmqpFramePayload::Heartbeat()       => write_u8(result, AMQP_FRAME_TYPE_HEARTBEAT),
+            AmqpFramePayload::Method(_)         => write_u8(&mut result, AMQP_FRAME_TYPE_METHOD),
+            AmqpFramePayload::Header(_, _, _)   => write_u8(&mut result, AMQP_FRAME_TYPE_HEADER),
+            AmqpFramePayload::Content(_)        => write_u8(&mut result, AMQP_FRAME_TYPE_CONTENT),
+            AmqpFramePayload::Heartbeat()       => write_u8(&mut result, AMQP_FRAME_TYPE_HEARTBEAT),
         }
 
-        write_u16(result, frame.channel);
+        write_u16(&mut result, frame.channel);
 
         let size_offset = result.len();
-        write_u32(result, 0);   // placeholde for frame size
+        write_u32(&mut result, 0);   // placeholde for frame size
 
-        FrameWriter::serialize_frame(frame, result);
+        FrameWriter::serialize_frame(frame, &mut result, buffers);
 
         // fill the real size
         let payload_size = (result.len() - size_offset - 4) as u32; // -4 for frame size placeholder
         result[size_offset .. size_offset + 4].copy_from_slice(&payload_size.to_be_bytes());
 
         // write frame trailing
-        write_u8(result, b'\xCE');
+        write_u8(&mut result, b'\xCE');
+
+        result
     }
 
-    fn serialize_frame(frame: AmqpFrame, target: &mut Vec<u8>) {
+    fn serialize_frame(frame: AmqpFrame, target: &mut Vec<u8>, buffers: &WriteBufferManager) {
         match frame.payload {
             AmqpFramePayload::Method(method) => FrameWriter::serialize_method_frame(target, &method),
             AmqpFramePayload::Header(class, size, properties) => FrameWriter::serialize_header_frame(target, class, size, &properties),
-            AmqpFramePayload::Content(data) => write_bytes(target, &data),
+            AmqpFramePayload::Content(data) => {
+                write_bytes(target, &data);
+                buffers.put_buffer(data);
+            },
             AmqpFramePayload::Heartbeat() => (),
         }
     }
