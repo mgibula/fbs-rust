@@ -73,6 +73,14 @@ impl AmqpConnection {
         self.ptr.writer_queue.send(Some(frame));
         self.ptr.signal.wait().await;
     }
+
+    pub fn get_buffer_stats(&self) -> (u64, u64, u64) {
+        self.ptr.buffers.get_stats()
+    }
+
+    pub fn set_buffers_capacity(&mut self, capacity: usize) {
+        self.ptr.buffers.change_capacity(capacity)
+    }
 }
 
 impl Drop for AmqpConnection {
@@ -94,7 +102,7 @@ impl AmqpConnectionReader {
         Self { fd, read_buffer: Vec::with_capacity(4096), read_offset: 0, frame_buffer: Vec::with_capacity(4096), buffers }
     }
 
-    fn change_capacity(&mut self, size: usize) {
+    fn change_frame_size(&mut self, size: usize) {
         assert!(self.read_buffer.capacity() <= size);
         self.read_buffer.reserve(size - self.read_buffer.capacity());
         self.frame_buffer.reserve(size - self.frame_buffer.capacity());
@@ -193,13 +201,45 @@ fn reserve_buffer_size(buffer: &mut Vec<u8>, size: usize) {
 
 pub(super) struct BufferManager {
     size: Cell<usize>,
-    max_capacity: usize,
+    max_capacity: Cell<usize>,
     buffers: RefCell<VecDeque<Vec<u8>>>,
+    allocations: Cell<u64>,
+    deallocations: Cell<u64>,
+    hits: Cell<u64>,
+}
+
+impl Debug for BufferManager {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AmqpConnectionInternal")
+        .field("size", &self.size)
+        .field("max_capacity", &self.max_capacity)
+        .field("buffers", &self.buffers.borrow().len())
+        .finish()
+    }
 }
 
 impl BufferManager {
-    fn init(size: usize, max_capacity: usize) -> Self {
-        BufferManager { size: Cell::new(size), max_capacity, buffers: RefCell::new(VecDeque::new()) }
+    fn new(size: usize, max_capacity: usize) -> Self {
+        BufferManager {
+            size: Cell::new(size),
+            max_capacity: Cell::new(max_capacity),
+            buffers: RefCell::new(VecDeque::new()),
+            allocations: Cell::new(0),
+            deallocations: Cell::new(0),
+            hits: Cell::new(0),
+        }
+    }
+
+    fn get_stats(&self) -> (u64, u64, u64) {
+        (self.allocations.get(), self.deallocations.get(), self.hits.get())
+    }
+
+    fn change_capacity(&self, capacity: usize) {
+        if self.max_capacity.get() > capacity && self.buffers.borrow().len() > capacity {
+            self.buffers.borrow_mut().resize(capacity, Vec::new())
+        }
+
+        self.max_capacity.set(capacity);
     }
 
     fn change_frame_size(&self, size: usize) {
@@ -217,13 +257,20 @@ impl BufferManager {
 
     pub(super) fn get_buffer(&self) -> Vec<u8> {
         match self.buffers.borrow_mut().pop_back() {
-            Some(buffer) => buffer,
-            None => Vec::with_capacity(self.size.get())
+            Some(buffer) => {
+                self.hits.set(self.hits.get() + 1);
+                buffer
+            },
+            None => {
+                self.allocations.set(self.allocations.get() + 1);
+                Vec::with_capacity(self.size.get())
+            }
         }
     }
 
     pub(super) fn put_buffer(&self, mut buffer: Vec<u8>) {
-        if self.buffers.borrow().len() >= self.max_capacity {
+        if self.buffers.borrow().len() >= self.max_capacity.get() {
+            self.deallocations.set(self.deallocations.get() + 1);
             return;
         }
 
@@ -318,7 +365,7 @@ impl AmqpConnectionInternal {
             max_frame_size: Cell::new(4096),
             heartbeat: Cell::new(0),
             last_error: RefCell::new(None),
-            buffers: Rc::new(BufferManager::init(4096, 10)),
+            buffers: Rc::new(BufferManager::new(4096, 10)),
         }
     }
 
@@ -450,7 +497,7 @@ impl AmqpConnectionInternal {
         match &frame.payload {
             AmqpFramePayload::Method(AmqpMethod::ConnectionTune(channels, frame, heartbeat)) => {
                 if *frame > 0 {
-                    reader.change_capacity((*frame) as usize);
+                    reader.change_frame_size((*frame) as usize);
                     writer.change_frame_size((*frame) as usize);
 
                     // no real server is going to send value so small, but we want to

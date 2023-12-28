@@ -106,6 +106,8 @@ fn consume_test() {
         async_sleep(Duration::new(1, 0)).await;
         channel.delete_queue("test-queue-2".to_string(), AmqpDeleteQueueFlags::new()).await?;
         channel.close().await?;
+
+        println!("buffer-stats: {:?}", amqp.get_buffer_stats());
         amqp.close().await;
 
         assert_eq!(counter.get(), 1);
@@ -161,6 +163,8 @@ fn return_test() {
 
         async_sleep(Duration::new(1, 0)).await;
         channel.close().await?;
+
+        println!("buffer-stats: {:?}", amqp.get_buffer_stats());
         amqp.close().await;
 
         assert_eq!(counter.get(), 1);
@@ -223,6 +227,8 @@ fn get_test() {
         channel.delete_queue("test-queue-3".to_string(), AmqpDeleteQueueFlags::new()).await?;
 
         channel.close().await?;
+
+        println!("buffer-stats: {:?}", amqp.get_buffer_stats());
         amqp.close().await;
 
         Ok(())
