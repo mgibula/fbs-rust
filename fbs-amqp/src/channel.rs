@@ -525,6 +525,8 @@ impl AmqpChannelInternals {
             },
             AmqpFramePayload::Content(data) => {
                 self.message_in_flight.borrow_mut().append_data(&data)?;
+                self.connection.buffers.put_buffer(data);
+
                 let frame = self.message_in_flight.borrow_mut().build_if_completed()?;
                 match frame {
                     None | Some((MessageDeliveryMode::None, _))=> (),

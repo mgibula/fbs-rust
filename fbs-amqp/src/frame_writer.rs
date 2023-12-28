@@ -1,15 +1,14 @@
 use std::collections::HashMap;
-use std::rc::Rc;
 
 use super::{AmqpData, AmqpBasicProperties};
-use super::connection::WriteBufferManager;
+use super::connection::BufferManager;
 use super::frame::{AmqpFrame, AmqpFramePayload, AmqpMethod};
 use super::defines::*;
 
 pub(super) struct FrameWriter;
 
 impl FrameWriter {
-    pub(super) fn write_frame(frame: AmqpFrame, buffers: &WriteBufferManager) -> Vec<u8> {
+    pub(super) fn write_frame(frame: AmqpFrame, buffers: &BufferManager) -> Vec<u8> {
         let mut result = buffers.get_buffer();
         match &frame.payload {
             AmqpFramePayload::Method(_)         => write_u8(&mut result, AMQP_FRAME_TYPE_METHOD),
@@ -35,7 +34,7 @@ impl FrameWriter {
         result
     }
 
-    fn serialize_frame(frame: AmqpFrame, target: &mut Vec<u8>, buffers: &WriteBufferManager) {
+    fn serialize_frame(frame: AmqpFrame, target: &mut Vec<u8>, buffers: &BufferManager) {
         match frame.payload {
             AmqpFramePayload::Method(method) => FrameWriter::serialize_method_frame(target, &method),
             AmqpFramePayload::Header(class, size, properties) => FrameWriter::serialize_header_frame(target, class, size, &properties),

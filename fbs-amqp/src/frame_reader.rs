@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use super::{AmqpData, AmqpBasicProperties};
 use super::AmqpFrameError;
 use super::frame::{AmqpFrame, AmqpFramePayload, AmqpMethod};
+use super::connection::BufferManager;
 use super::defines::*;
 
 pub(super) struct AmqpFrameReader<'buffer> {
@@ -14,18 +15,18 @@ impl<'buffer> AmqpFrameReader<'buffer> {
         Self { data }
     }
 
-    pub(super) fn read_frame(&mut self, frame_type: u8, channel: u16) -> Result<AmqpFrame, AmqpFrameError> {
+    pub(super) fn read_frame(&mut self, buffers: &BufferManager, frame_type: u8, channel: u16) -> Result<AmqpFrame, AmqpFrameError> {
         match frame_type {
             AMQP_FRAME_TYPE_METHOD => Ok(AmqpFrame { channel, payload: AmqpFramePayload::Method(self.read_method_frame()?) }),
             AMQP_FRAME_TYPE_HEADER => Ok(AmqpFrame { channel, payload: self.read_header_frame()? }),
-            AMQP_FRAME_TYPE_CONTENT => Ok(AmqpFrame { channel, payload: self.read_content_frame()? }),
+            AMQP_FRAME_TYPE_CONTENT => Ok(AmqpFrame { channel, payload: self.read_content_frame(buffers)? }),
             AMQP_FRAME_TYPE_HEARTBEAT => Ok(AmqpFrame { channel, payload: AmqpFramePayload::Heartbeat() }),
             _ => Err(AmqpFrameError::InvalidFrameType(frame_type)),
         }
     }
 
-    fn read_content_frame(&mut self) -> Result<AmqpFramePayload, AmqpFrameError> {
-        Ok(AmqpFramePayload::Content(self.read_remaining_bytes()))
+    fn read_content_frame(&mut self, buffers: &BufferManager) -> Result<AmqpFramePayload, AmqpFrameError> {
+        Ok(AmqpFramePayload::Content(self.read_remaining_bytes(buffers)))
     }
 
     fn read_header_frame(&mut self) -> Result<AmqpFramePayload, AmqpFrameError> {
@@ -369,8 +370,10 @@ impl<'buffer> AmqpFrameReader<'buffer> {
         Ok(())
     }
 
-    fn read_remaining_bytes(&mut self) -> Vec<u8> {
-        let result = self.data.to_vec();
+    fn read_remaining_bytes(&mut self, buffers: &BufferManager) -> Vec<u8> {
+        let mut result = buffers.get_buffer();
+        result.extend_from_slice(&self.data);
+
         self.data = &self.data[0..0];
 
         result

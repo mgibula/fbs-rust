@@ -86,11 +86,12 @@ struct AmqpConnectionReader {
     read_buffer: Vec<u8>,
     read_offset: usize,
     frame_buffer: Vec<u8>,
+    pub buffers: Rc<BufferManager>,
 }
 
 impl AmqpConnectionReader {
-    fn new(fd: Rc<Socket>) -> Self {
-        Self { fd, read_buffer: Vec::with_capacity(4096), read_offset: 0, frame_buffer: Vec::with_capacity(4096) }
+    fn new(fd: Rc<Socket>, buffers: Rc<BufferManager>) -> Self {
+        Self { fd, read_buffer: Vec::with_capacity(4096), read_offset: 0, frame_buffer: Vec::with_capacity(4096), buffers }
     }
 
     fn change_capacity(&mut self, size: usize) {
@@ -172,7 +173,7 @@ impl AmqpConnectionReader {
         }
 
         let mut reader = AmqpFrameReader::new(&frame_buffer);
-        let result = reader.read_frame(frame_type, channel);
+        let result = reader.read_frame(&self.buffers, frame_type, channel);
         self.frame_buffer = frame_buffer;
 
         match result {
@@ -190,15 +191,15 @@ fn reserve_buffer_size(buffer: &mut Vec<u8>, size: usize) {
     buffer.resize(size, 0);
 }
 
-pub(super) struct WriteBufferManager {
+pub(super) struct BufferManager {
     size: Cell<usize>,
     max_capacity: usize,
     buffers: RefCell<VecDeque<Vec<u8>>>,
 }
 
-impl WriteBufferManager {
+impl BufferManager {
     fn init(size: usize, max_capacity: usize) -> Self {
-        WriteBufferManager { size: Cell::new(size), max_capacity, buffers: RefCell::new(VecDeque::new()) }
+        BufferManager { size: Cell::new(size), max_capacity, buffers: RefCell::new(VecDeque::new()) }
     }
 
     fn change_frame_size(&self, size: usize) {
@@ -234,11 +235,11 @@ impl WriteBufferManager {
 struct AmqpConnectionWriter {
     fd: Rc<Socket>,
     queue: VecDeque<AmqpFrame>,
-    buffers: Rc<WriteBufferManager>,
+    buffers: Rc<BufferManager>,
 }
 
 impl AmqpConnectionWriter {
-    fn new(fd: Rc<Socket>, buffers: Rc<WriteBufferManager>) -> Self {
+    fn new(fd: Rc<Socket>, buffers: Rc<BufferManager>) -> Self {
         Self { fd, queue: VecDeque::new(), buffers }
     }
 
@@ -285,7 +286,7 @@ pub(super) struct AmqpConnectionInternal {
     max_channels: Cell<u16>,
     heartbeat: Cell<u16>,
     last_error: RefCell<Option<AmqpConnectionError>>,
-    pub buffers: Rc<WriteBufferManager>,
+    pub buffers: Rc<BufferManager>,
 }
 
 impl Debug for AmqpConnectionInternal {
@@ -317,7 +318,7 @@ impl AmqpConnectionInternal {
             max_frame_size: Cell::new(4096),
             heartbeat: Cell::new(0),
             last_error: RefCell::new(None),
-            buffers: Rc::new(WriteBufferManager::init(4096, 10)),
+            buffers: Rc::new(BufferManager::init(4096, 10)),
         }
     }
 
@@ -426,7 +427,7 @@ impl AmqpConnectionInternal {
             Err((error, _)) => return Err(AmqpConnectionError::WriteError(error)),
         }
 
-        let mut reader = AmqpConnectionReader::new(self.fd.clone());
+        let mut reader = AmqpConnectionReader::new(self.fd.clone(), self.buffers.clone());
         let mut writer = AmqpConnectionWriter::new(self.fd.clone(), self.buffers.clone());
 
         let _ = reader.read_frame().await?;
