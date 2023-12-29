@@ -9,7 +9,7 @@ use fbs_library::socket::{Socket, SocketDomain, SocketType, SocketFlags};
 use fbs_library::indexed_list::IndexedList;
 use fbs_runtime::async_utils::{AsyncSignal, AsyncChannelRx, AsyncChannelTx, async_channel_create};
 use fbs_runtime::{async_connect, async_write, async_read_into, async_spawn, async_sleep};
-use fbs_runtime::resolver::resolve_address;
+use fbs_resolver::resolve_address;
 use fbs_executor::TaskHandle;
 
 use super::{AmqpConnectionError, AmqpChannel};

@@ -5,6 +5,7 @@ members = [
     "fbs-library",
     "fbs-runtime",
     "fbs-reactor",
+    "fbs-resolver",
     "fbs-amqp",
     "liburing-sys",
     "libcurl-sys",

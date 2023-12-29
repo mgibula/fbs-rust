@@ -20,7 +20,6 @@ mod linked_ops;
 
 pub mod async_utils;
 pub mod http_client;
-pub mod resolver;
 
 pub use ops::*;
 pub use linked_ops::*;

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::string::FromUtf8Error;
 use fbs_library::system_error::SystemError;
-use fbs_runtime::resolver::ResolveAddressError;
+use fbs_resolver::ResolveAddressError;
 use thiserror::Error;
 
 mod defines;

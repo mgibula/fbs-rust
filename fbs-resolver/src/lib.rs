@@ -12,11 +12,11 @@ use fbs_library::eventfd::{EventFd, EventFdFlags};
 use fbs_library::ip_address::IpAddress;
 use fbs_library::socket_address::SocketIpAddress;
 
+use fbs_runtime::{AsyncReadStruct, async_read_struct};
+
 use libc::{timespec, addrinfo, sigval, SIGEV_THREAD};
 use libc::pthread_attr_t;
 use thiserror::Error;
-
-use crate::{AsyncReadStruct, async_read_struct};
 
 include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 
@@ -282,7 +282,7 @@ pub async fn resolve_address(address: &str, default_port: Option<u16>) -> Result
 
 #[cfg(test)]
 mod test {
-    use crate::async_run;
+    use fbs_runtime::async_run;
     use super::*;
 
     #[test]
