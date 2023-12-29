@@ -1,3 +1,5 @@
+#[macro_use] extern crate const_cstr;
+
 use std::ffi::CString;
 use std::ffi::CStr;
 use std::ffi::NulError;
@@ -8,9 +10,9 @@ use std::pin::Pin;
 use std::time::Duration;
 use std::collections::HashMap;
 
-use super::async_spawn;
-use super::async_utils::{async_channel_create, AsyncChannelRx, AsyncChannelTx, AsyncSignal};
-use super::ops::{async_sleep_with_result, async_sleep_update, async_cancel, async_poll, async_poll_update};
+use fbs_runtime::async_spawn;
+use fbs_runtime::async_utils::{async_channel_create, AsyncChannelRx, AsyncChannelTx, AsyncSignal};
+use fbs_runtime::{async_sleep_with_result, async_sleep_update, async_cancel, async_poll, async_poll_update};
 
 use fbs_executor::TaskHandle;
 use fbs_library::poll::PollMask;
@@ -998,7 +1000,7 @@ fn curlm_code_to_error(code: CURLMcode) -> String {
 
 #[cfg(test)]
 mod tests {
-    use crate::async_run;
+    use fbs_runtime::async_run;
 
     use super::*;
 

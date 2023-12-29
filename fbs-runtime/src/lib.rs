@@ -1,5 +1,3 @@
-#[macro_use] extern crate const_cstr;
-
 use std::future::Future;
 use std::cell::RefCell;
 use std::pin::Pin;
@@ -19,7 +17,6 @@ mod ops;
 mod linked_ops;
 
 pub mod async_utils;
-pub mod http_client;
 
 pub use ops::*;
 pub use linked_ops::*;
