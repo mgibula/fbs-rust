@@ -363,37 +363,6 @@ impl HttpResponseInner {
             result
         }
     }
-
-    fn fill_response_data(self: Pin<&Self>, data: &mut HttpResponseData) {
-        unsafe {
-            let mut code: libc::c_long = 0;
-            curl_easy_getinfo(self.handle, CURLINFO_RESPONSE_CODE, &mut code);
-
-            let mut prev_header = std::ptr::null_mut::<curl_header>();
-            loop {
-                let header = curl_easy_nextheader(self.handle, CURLH_HEADER, -1, prev_header);
-                if header.is_null() {
-                    break;
-                }
-
-                let key = CStr::from_ptr((*header).name).to_str();
-                let value = CStr::from_ptr((*header).value).to_str();
-
-                prev_header = header;
-                match (key, value) {
-                    (Ok(key), Ok(value)) => {
-                        data.headers.insert(key.to_owned(), value.to_owned());
-                    },
-                    (_, _) => {
-                        eprintln!("Invalid characters in header name or value, skipping");
-                        continue;
-                    },
-                }
-            }
-
-            data.http_code = code as i32;
-        }
-    }
 }
 
 #[derive(Debug, Default, Clone)]
@@ -543,7 +512,7 @@ impl HttpClientDataPtr {
 
     async fn wait_for_event(&self) -> IOEvent {
         // clone is to avoid holding borrow across suspension point
-        let mut rx = self.ptr.borrow_mut().io_events_rx.clone();
+        let rx = self.ptr.borrow_mut().io_events_rx.clone();
         rx.receive().await
     }
 
