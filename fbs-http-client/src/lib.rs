@@ -76,6 +76,7 @@ pub struct HttpRequest {
     pub url: String,
     pub headers: HashMap<String, String>,
     pub follow_redirects: bool,
+    pub content: Vec<u8>,
 }
 
 #[derive(Debug, Clone)]
@@ -87,7 +88,7 @@ pub struct HttpResponseData {
 
 impl HttpRequest {
     pub fn new() -> Self {
-        Self { method: HttpMethod::Get, url: String::new(), headers: HashMap::new(), follow_redirects: false }
+        Self { method: HttpMethod::Get, url: String::new(), headers: HashMap::new(), follow_redirects: false, content: Vec::new() }
     }
 }
 
@@ -106,7 +107,7 @@ impl HttpResponse {
         Ok(result)
     }
 
-    fn setup(&self, request: &HttpRequest) -> Result<(), HttpClientError> {
+    fn setup(&self, request: &mut HttpRequest) -> Result<(), HttpClientError> {
         self.ptr.borrow_mut().as_mut().setup(request)
     }
 
@@ -268,7 +269,7 @@ impl HttpResponseInner {
         Ok(())
     }
 
-    fn setup(mut self: Pin<&mut Self>, request: &HttpRequest) -> Result<(), HttpClientError> {
+    fn setup(mut self: Pin<&mut Self>, request: &mut HttpRequest) -> Result<(), HttpClientError> {
         unsafe {
             match request.method {
                 HttpMethod::Get => self.as_ref().set_option(EasyOption::HttpGet(true))?,
@@ -277,6 +278,7 @@ impl HttpResponseInner {
                 HttpMethod::Delete => self.as_ref().set_option(EasyOption::CustomRequest(Some(HTTP_METHOD_DELETE.as_cstr())))?,
             };
 
+            self.as_mut().get_unchecked_mut().data_to_send.data = std::mem::take(&mut request.content);
             self.as_mut().get_unchecked_mut().url_cstring = CString::new(request.url.clone())?;
             self.as_ref().set_option(EasyOption::Url(self.url_cstring.as_c_str()))?;
 
@@ -683,9 +685,9 @@ impl HttpPinnedData {
         Ok(())
     }
 
-    pub fn execute(mut self: Pin<&mut Self>, request: HttpRequest) -> Result<HttpResponse, HttpClientError> {
+    pub fn execute(mut self: Pin<&mut Self>, mut request: HttpRequest) -> Result<HttpResponse, HttpClientError> {
         let response = HttpResponse::new()?;
-        response.setup(&request)?;
+        response.setup(&mut request)?;
 
         self.poller.add_response(response.clone());
         self.as_mut().attach(&response)?;
