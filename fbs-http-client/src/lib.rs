@@ -78,6 +78,7 @@ pub struct HttpRequest {
     pub follow_redirects: bool,
     pub content: Vec<u8>,
     pub content_stream: Option<Box<dyn Fn(&mut [u8]) -> usize>>,
+    pub response_stream: Option<Box<dyn Fn(&[u8]) -> usize>>,
 }
 
 impl Debug for HttpRequest {
@@ -89,6 +90,7 @@ impl Debug for HttpRequest {
         .field("follow_redirects", &self.follow_redirects)
         .field("content", &self.content)
         .field("content_stream", &self.content_stream.is_some())
+        .field("response_stream", &self.response_stream.is_some())
         .finish()
     }
 }
@@ -102,7 +104,7 @@ pub struct HttpResponseData {
 
 impl HttpRequest {
     pub fn new() -> Self {
-        Self { method: HttpMethod::Get, url: String::new(), headers: HashMap::new(), follow_redirects: false, content: Vec::new(), content_stream: None }
+        Self { method: HttpMethod::Get, url: String::new(), headers: HashMap::new(), follow_redirects: false, content: Vec::new(), content_stream: None, response_stream: None }
     }
 }
 
@@ -162,17 +164,46 @@ impl Debug for UploadBuffer {
     }
 }
 
-#[derive(Debug)]
+struct ResponseBuffer {
+    stream: Option<Box<dyn Fn(&[u8]) -> usize>>,
+    data: Vec<u8>,
+}
+
+impl Debug for ResponseBuffer {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResponseBuffer")
+        .field("stream", &self.stream.is_some())
+        .field("data", &self.data)
+        .finish()
+    }
+}
+
 struct HttpResponseInner {
     handle: *mut CURL,
     data_to_send: UploadBuffer,
-    data_received: Vec<u8>,
+    data_received: ResponseBuffer,
+    response_stream: Option<Box<dyn Fn(&[u8]) -> usize>>,
     curl_error: [u8; CURL_ERROR_SIZE as usize],
     url_cstring: CString,
     completion: AsyncSignal,
     error: Option<String>,
     headers: *mut curl_slist,
     _pin: PhantomPinned,
+}
+
+impl Debug for HttpResponseInner {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HttpResponseInner")
+        .field("data_to_send", &self.data_to_send)
+        .field("data_received", &self.data_received)
+        .field("response_stream", &self.response_stream.is_some())
+        .field("curl_error", &self.curl_error)
+        .field("url_cstring", &self.url_cstring)
+        .field("completion", &self.completion)
+        .field("error", &self.error)
+        .field("headers", &self.headers)
+        .finish()
+    }
 }
 
 impl Drop for HttpResponseInner {
@@ -197,8 +228,9 @@ impl HttpResponseInner {
 
             Ok(Self {
                 handle,
-                data_to_send: UploadBuffer { stream: None, data: vec![], offset: 0 },
-                data_received: vec![],
+                data_to_send: UploadBuffer { stream: None, data: Vec::new(), offset: 0 },
+                data_received: ResponseBuffer { stream: None, data: Vec::new() },
+                response_stream: None,
                 curl_error: [0; CURL_ERROR_SIZE as usize],
                 url_cstring: CString::default(),
                 completion: AsyncSignal::new(),
@@ -303,6 +335,7 @@ impl HttpResponseInner {
             };
 
             self.as_mut().get_unchecked_mut().data_to_send.data = std::mem::take(&mut request.content);
+            self.as_mut().get_unchecked_mut().response_stream = std::mem::take(&mut request.response_stream);
             self.as_mut().get_unchecked_mut().url_cstring = CString::new(request.url.clone())?;
             self.as_ref().set_option(EasyOption::Url(self.url_cstring.as_c_str()))?;
 
@@ -356,7 +389,11 @@ impl HttpResponseInner {
 
     fn get_ok_result(mut self: Pin<&mut Self>) -> HttpResponseData {
         unsafe {
-            let mut result = HttpResponseData { http_code: 0, headers: HashMap::new(), response_body: std::mem::take(&mut self.as_mut().get_unchecked_mut().data_received) };
+            let mut result = HttpResponseData {
+                http_code: 0,
+                headers: HashMap::new(),
+                response_body: std::mem::take(&mut self.as_mut().get_unchecked_mut().data_received.data)
+            };
 
             let mut code: libc::c_long = 0;
             curl_easy_getinfo(self.handle, CURLINFO_RESPONSE_CODE, &mut code);
@@ -834,10 +871,17 @@ unsafe extern "C" fn read_proxy(ptr: *mut libc::c_void, size: libc::size_t, nmem
 
 unsafe extern "C" fn write_proxy(ptr: *mut libc::c_char, size: libc::size_t, nmemb: libc::size_t, userdata: *mut libc::c_void) -> libc::size_t {
     let data = std::slice::from_raw_parts(ptr as *const u8, size * nmemb);
-    let buffer = &mut *(userdata as *mut Vec<u8>);
-    buffer.extend_from_slice(data);
+    let buffer = &mut *(userdata as *mut ResponseBuffer);
 
-    size * nmemb
+    match &buffer.stream {
+        None => {
+            buffer.data.extend_from_slice(data);
+            size * nmemb
+        },
+        Some(stream) => {
+            stream(data)
+        },
+    }
 }
 
 unsafe fn poll_cleanup(socket: Rc<SocketData>) {
