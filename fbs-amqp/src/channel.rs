@@ -745,7 +745,7 @@ impl AmqpMessageBuilder {
     fn return_buffer(&mut self, buffer: Vec<u8>) {
         if buffer.capacity() > self.content.capacity() {
             self.content = buffer;
-            self.content.truncate(0);
+            self.content.clear();
         }
     }
 
