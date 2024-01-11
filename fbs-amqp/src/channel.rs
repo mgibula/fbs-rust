@@ -26,7 +26,7 @@ impl AmqpChannel {
         }
     }
 
-    pub fn set_on_return(&mut self, callback: Option<Box<dyn Fn(i16, String, String, String, AmqpMessage)>>) {
+    pub fn set_on_return(&mut self, callback: Option<Box<dyn Fn(i16, String, String, String, &mut AmqpMessage)>>) {
         *self.ptr.on_return.borrow_mut() = callback;
     }
 
@@ -385,7 +385,7 @@ pub(super) struct AmqpChannelInternals {
     pub number: Cell<usize>,
     active: Cell<bool>,
     last_error: RefCell<Option<AmqpConnectionError>>,
-    on_return: RefCell<Option<Box<dyn Fn(i16, String, String, String, AmqpMessage)>>>,
+    on_return: RefCell<Option<Box<dyn Fn(i16, String, String, String, &mut AmqpMessage)>>>,
     message_in_flight: RefCell<AmqpMessageBuilder>,
     consumers: RefCell<HashMap<String, AmqpConsumer>>,
     install_consumer: Cell<Option<AmqpConsumer>>,
@@ -530,22 +530,24 @@ impl AmqpChannelInternals {
                 let frame = self.message_in_flight.borrow_mut().build_if_completed()?;
                 match frame {
                     None | Some((MessageDeliveryMode::None, _))=> (),
-                    Some((MessageDeliveryMode::Return(code, reason, class, method), message)) => {
+                    Some((MessageDeliveryMode::Return(code, reason, class, method), mut message)) => {
                         match &*self.on_return.borrow_mut() {
                             None => (),
                             Some(callback) => {
-                                callback(code, reason, class, method, message);
+                                callback(code, reason, class, method, &mut message);
+                                self.message_in_flight.borrow_mut().return_buffer(message.content);
                             },
                         }
                     },
-                    Some((MessageDeliveryMode::Deliver(consumer_tag, delivery_tag, redelivered, exchange, routing_key), message)) => {
+                    Some((MessageDeliveryMode::Deliver(consumer_tag, delivery_tag, redelivered, exchange, routing_key), mut message)) => {
                         let consumers = self.consumers.borrow();
                         let consumer = consumers.get(&consumer_tag);
 
                         match consumer {
                             None => eprintln!("Received message with consumer tag {}, but no consumer installed", consumer_tag),
                             Some(callback) => {
-                                callback(delivery_tag, redelivered, exchange, routing_key, message);
+                                callback(delivery_tag, redelivered, exchange, routing_key, &mut message);
+                                self.message_in_flight.borrow_mut().return_buffer(message.content);
                             },
                         }
                     },
@@ -740,15 +742,28 @@ impl AmqpMessageBuilder {
         result
     }
 
+    fn return_buffer(&mut self, buffer: Vec<u8>) {
+        if buffer.capacity() > self.content.capacity() {
+            self.content = buffer;
+            self.content.truncate(0);
+        }
+    }
+
     fn prepare_mode(&mut self, mode: MessageDeliveryMode) -> Result<(), AmqpConnectionError> {
         self.mode = mode;
         Ok(())
     }
 
     fn prepare_from_header(&mut self, size: u64, properties: AmqpBasicProperties) -> Result<(), AmqpConnectionError> {
+        let size = size as usize;
+
         self.properties = properties;
-        self.size = size as usize;
-        self.content = Vec::with_capacity(size as usize);
+        self.size = size;
+
+        if self.content.capacity() < size {
+            self.content.reserve(size - self.content.capacity());
+        }
+
         Ok(())
     }
 

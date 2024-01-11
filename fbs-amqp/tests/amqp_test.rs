@@ -83,7 +83,7 @@ fn consume_test() {
         let counter = Rc::new(Cell::new(0));
         let counter_copy = counter.clone();
 
-        let consume = Box::new(move |_, _, exchange, routing_key, message: AmqpMessage| {
+        let consume = Box::new(move |_, _, exchange, routing_key, message: &mut AmqpMessage| {
             assert_eq!(exchange, "");
             assert_eq!(routing_key, "test-queue-2");
             assert_eq!(message.properties.content_type, Some("text/plain".to_string()));
@@ -144,7 +144,7 @@ fn return_test() {
         let counter = Rc::new(Cell::new(0));
         let counter_copy = counter.clone();
 
-        let return_cb = Box::new(move |_, _, exchange, routing_key, message: AmqpMessage| {
+        let return_cb = Box::new(move |_, _, exchange, routing_key, message: &mut AmqpMessage| {
             assert_eq!(exchange, "");
             assert_eq!(routing_key, "test-queue-nonexisting");
             assert_eq!(message.properties.content_type, Some("text/plain".to_string()));

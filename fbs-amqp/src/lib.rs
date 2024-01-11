@@ -11,7 +11,7 @@ mod frame_writer;
 mod connection;
 mod channel;
 
-pub type AmqpConsumer = Box<dyn Fn(u64, bool, String, String, AmqpMessage)>;
+pub type AmqpConsumer = Box<dyn Fn(u64, bool, String, String, &mut AmqpMessage)>;
 pub type AmqpConfirmAckCallback = Box<dyn Fn(u64, bool)>;
 pub type AmqpConfirmNackCallback = Box<dyn Fn(u64, AmqpNackFlags)>;
 
