@@ -182,7 +182,6 @@ struct HttpResponseInner {
     handle: *mut CURL,
     data_to_send: UploadBuffer,
     data_received: ResponseBuffer,
-    response_stream: Option<Box<dyn Fn(&[u8]) -> usize>>,
     curl_error: [u8; CURL_ERROR_SIZE as usize],
     url_cstring: CString,
     completion: AsyncSignal,
@@ -196,7 +195,6 @@ impl Debug for HttpResponseInner {
         f.debug_struct("HttpResponseInner")
         .field("data_to_send", &self.data_to_send)
         .field("data_received", &self.data_received)
-        .field("response_stream", &self.response_stream.is_some())
         .field("curl_error", &self.curl_error)
         .field("url_cstring", &self.url_cstring)
         .field("completion", &self.completion)
@@ -230,7 +228,6 @@ impl HttpResponseInner {
                 handle,
                 data_to_send: UploadBuffer { stream: None, data: Vec::new(), offset: 0 },
                 data_received: ResponseBuffer { stream: None, data: Vec::new() },
-                response_stream: None,
                 curl_error: [0; CURL_ERROR_SIZE as usize],
                 url_cstring: CString::default(),
                 completion: AsyncSignal::new(),
@@ -335,7 +332,7 @@ impl HttpResponseInner {
             };
 
             self.as_mut().get_unchecked_mut().data_to_send.data = std::mem::take(&mut request.content);
-            self.as_mut().get_unchecked_mut().response_stream = std::mem::take(&mut request.response_stream);
+            self.as_mut().get_unchecked_mut().data_received.stream = std::mem::take(&mut request.response_stream);
             self.as_mut().get_unchecked_mut().url_cstring = CString::new(request.url.clone())?;
             self.as_ref().set_option(EasyOption::Url(self.url_cstring.as_c_str()))?;
 
@@ -1070,6 +1067,24 @@ mod tests {
             let r = response.wait_for_completion().await;
 
             assert_eq!(r.is_ok(), true);
+        });
+    }
+
+    #[test]
+    fn http_client_request_stream() {
+        async_run(async move {
+            let mut client = HttpClient::new().unwrap();
+            let mut request = HttpRequest::new();
+            request.url = String::from("http://www.google.com/");
+            request.follow_redirects = true;
+            request.response_stream = Some(Box::new(|_| {
+                0   // force an error
+            }));
+
+            let response = client.execute(request).unwrap();
+            let r = response.wait_for_completion().await;
+
+            assert_eq!(r.is_err(), true);
         });
     }
 }
