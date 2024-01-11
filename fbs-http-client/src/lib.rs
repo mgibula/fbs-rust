@@ -9,6 +9,7 @@ use std::cell::{Cell, RefCell};
 use std::pin::Pin;
 use std::time::Duration;
 use std::collections::HashMap;
+use std::fmt::{Debug, Formatter};
 
 use fbs_runtime::async_spawn;
 use fbs_runtime::async_utils::{async_channel_create, AsyncChannelRx, AsyncChannelTx, AsyncSignal};
@@ -70,13 +71,26 @@ pub enum HttpMethod {
     Delete,
 }
 
-#[derive(Debug, Clone)]
 pub struct HttpRequest {
     pub method: HttpMethod,
     pub url: String,
     pub headers: HashMap<String, String>,
     pub follow_redirects: bool,
     pub content: Vec<u8>,
+    pub content_stream: Option<Box<dyn Fn(&mut [u8]) -> usize>>,
+}
+
+impl Debug for HttpRequest {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HttpRequest")
+        .field("method", &self.method)
+        .field("url", &self.url)
+        .field("headers", &self.headers)
+        .field("follow_redirects", &self.follow_redirects)
+        .field("content", &self.content)
+        .field("content_stream", &self.content_stream.is_some())
+        .finish()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -88,7 +102,7 @@ pub struct HttpResponseData {
 
 impl HttpRequest {
     pub fn new() -> Self {
-        Self { method: HttpMethod::Get, url: String::new(), headers: HashMap::new(), follow_redirects: false, content: Vec::new() }
+        Self { method: HttpMethod::Get, url: String::new(), headers: HashMap::new(), follow_redirects: false, content: Vec::new(), content_stream: None }
     }
 }
 
@@ -132,10 +146,20 @@ impl HttpResponse {
     }
 }
 
-#[derive(Debug)]
 struct UploadBuffer {
+    stream: Option<Box<dyn Fn(&mut [u8]) -> usize>>,
     data: Vec<u8>,
     offset: usize,
+}
+
+impl Debug for UploadBuffer {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UploadBuffer")
+        .field("stream", &self.stream.is_some())
+        .field("data", &self.data)
+        .field("offset", &self.offset)
+        .finish()
+    }
 }
 
 #[derive(Debug)]
@@ -173,7 +197,7 @@ impl HttpResponseInner {
 
             Ok(Self {
                 handle,
-                data_to_send: UploadBuffer { data: vec![], offset: 0 },
+                data_to_send: UploadBuffer { stream: None, data: vec![], offset: 0 },
                 data_received: vec![],
                 curl_error: [0; CURL_ERROR_SIZE as usize],
                 url_cstring: CString::default(),
@@ -791,12 +815,21 @@ unsafe extern "C" fn timer_callback(_: *mut CURLM, timeout_ms: libc::c_long, soc
 unsafe extern "C" fn read_proxy(ptr: *mut libc::c_void, size: libc::size_t, nmemb: libc::size_t, userdata: *mut libc::c_void) -> libc::size_t {
     let upload = &mut *(userdata as *mut UploadBuffer);
     let bytes_requested = size * nmemb;
-    let bytes_to_copy = std::cmp::min(bytes_requested, upload.data.len() - upload.offset);
 
-    std::ptr::copy_nonoverlapping(upload.data.as_ptr(), ptr as *mut u8, bytes_to_copy);
-    upload.offset += bytes_to_copy;
+    match &upload.stream {
+        None => {
+            let bytes_to_copy = std::cmp::min(bytes_requested, upload.data.len() - upload.offset);
 
-    bytes_to_copy
+            std::ptr::copy_nonoverlapping(upload.data.as_ptr(), ptr as *mut u8, bytes_to_copy);
+            upload.offset += bytes_to_copy;
+
+            bytes_to_copy
+        },
+        Some(stream) => {
+            let dst = std::slice::from_raw_parts_mut(ptr as *mut u8, bytes_requested);
+            stream(dst)
+        }
+    }
 }
 
 unsafe extern "C" fn write_proxy(ptr: *mut libc::c_char, size: libc::size_t, nmemb: libc::size_t, userdata: *mut libc::c_void) -> libc::size_t {
