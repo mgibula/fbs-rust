@@ -1,5 +1,6 @@
 use fbs_application::*;
 
+#[derive(Debug)]
 enum AppEvent {
 
 }
@@ -18,15 +19,15 @@ impl ApplicationLogic for HealthcheckApp {
     type Event = AppEvent;
 
     fn create() -> Result<Self, Self::Error> {
-        todo!()
+        Ok(Self { })
     }
 
     fn handle_system_event(&mut self, event: SystemEvent) {
-        todo!()
+        eprintln!("App::handle_system_event - {:?}", event);
     }
 
-    fn handle_app_event(&mut self, state: &mut ApplicationState<Self::Event>, event: Self::Event) {
-        todo!()
+    fn handle_app_event(&mut self, _state: &mut ApplicationState<Self::Event>, event: Self::Event) {
+        eprintln!("App::handle_app_event - {:?}", event);
     }
 }
 
