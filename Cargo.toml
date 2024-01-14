@@ -8,7 +8,9 @@ members = [
     "fbs-resolver",
     "fbs-http-client",
     "fbs-amqp",
+    "fbs-application",
     "liburing-sys",
     "libcurl-sys",
     "test-sandbox",
+    "app-healthcheck",
 ]
