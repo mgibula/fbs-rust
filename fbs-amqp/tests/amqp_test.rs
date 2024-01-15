@@ -9,7 +9,7 @@ use fbs_runtime::{async_run, async_sleep};
 fn bad_connect_test() {
     async_run(async {
         let params = AmqpConnectionParams::default();
-        let connection = AmqpConnection::connect(&params).await;
+        let connection = AmqpConnection::connect(params).await;
 
         assert!(connection.is_err());
     });
@@ -24,7 +24,7 @@ fn good_connect_test() {
         params.password = "guest".to_string();
         params.vhost = "/".to_string();
 
-        let connection = AmqpConnection::connect(&params).await;
+        let connection = AmqpConnection::connect(params).await;
         assert!(connection.is_ok());
     });
 }
@@ -37,7 +37,7 @@ fn basic_operations_test() {
         params.password = "guest".to_string();
         params.vhost = "/".to_string();
 
-        let mut amqp = AmqpConnection::connect(&params).await?;
+        let mut amqp = AmqpConnection::connect(params).await?;
         let mut channel = amqp.channel_open().await?;
         channel.declare_exchange("test-exchange-1".to_string(), "direct".to_string(), AmqpExchangeFlags::new()).await?;
         channel.declare_queue("test-queue-1".to_string(), AmqpQueueFlags::new().durable(true)).await?;
@@ -67,7 +67,7 @@ fn consume_test() {
         params.password = "guest".to_string();
         params.vhost = "/".to_string();
 
-        let mut amqp = AmqpConnection::connect(&params).await?;
+        let mut amqp = AmqpConnection::connect(params).await?;
         let mut channel = amqp.channel_open().await?;
         let publisher = channel.publisher();
 
@@ -126,7 +126,7 @@ fn return_test() {
         params.password = "guest".to_string();
         params.vhost = "/".to_string();
 
-        let mut amqp = AmqpConnection::connect(&params).await?;
+        let mut amqp = AmqpConnection::connect(params).await?;
         let mut channel = amqp.channel_open().await?;
         let publisher = channel.publisher();
 
@@ -184,7 +184,7 @@ fn get_test() {
         params.password = "guest".to_string();
         params.vhost = "/".to_string();
 
-        let mut amqp = AmqpConnection::connect(&params).await?;
+        let mut amqp = AmqpConnection::connect(params).await?;
         let mut channel = amqp.channel_open().await?;
         let publisher = channel.publisher();
 
