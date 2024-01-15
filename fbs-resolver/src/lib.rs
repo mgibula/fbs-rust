@@ -239,9 +239,6 @@ unsafe extern "C" fn sigev_notifier(ptr: sigval) {
     let inner = inner_ptr.lock().unwrap();
 
     inner.1.write(1);
-
-    std::mem::drop(inner);
-    std::mem::forget(inner_ptr);
 }
 
 #[derive(Error, Debug, Clone)]
