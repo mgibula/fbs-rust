@@ -26,6 +26,7 @@ pub struct AmqpConnectionParams {
     pub username: String,
     pub password: String,
     pub vhost: String,
+    pub heartbeat: u16,
 }
 
 #[derive(Debug)]
@@ -511,6 +512,10 @@ impl AmqpConnectionInternal {
                 self.heartbeat.set(*heartbeat);
             },
             _ => (),
+        }
+
+        if params.heartbeat > 0 {
+            self.heartbeat.set(params.heartbeat);
         }
 
         let response = AmqpFrame {
