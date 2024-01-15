@@ -42,6 +42,10 @@ impl AmqpConnection {
         Ok(result)
     }
 
+    pub fn is_alive(&self) -> bool {
+        self.ptr.is_connection_valid().is_ok()
+    }
+
     pub async fn channel_open(&mut self) -> Result<AmqpChannel, AmqpConnectionError> {
         self.ptr.is_connection_valid()?;
 
