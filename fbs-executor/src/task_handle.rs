@@ -36,7 +36,7 @@ impl<T> TaskHandle<T> {
         }
     }
 
-    pub fn result(self) -> Option<T> {
+    pub fn result(&self) -> Option<T> {
         self.result.take()
     }
 
