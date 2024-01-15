@@ -20,13 +20,27 @@ use super::frame_writer::FrameWriter;
 
 const FRAME_EXTRA_SIZE: u32 = 8;  // size of frame header and footer
 
-#[derive(Debug, Default, Clone)]
+#[derive(Default)]
 pub struct AmqpConnectionParams {
     pub address: String,
     pub username: String,
     pub password: String,
     pub vhost: String,
     pub heartbeat: u16,
+    pub on_error: Option<Box<dyn Fn(AmqpConnectionError)>>,
+}
+
+impl Debug for AmqpConnectionParams {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AmqpConnectionParams")
+        .field("address", &self.address)
+        .field("username", &self.username)
+        .field("password", &self.password)
+        .field("vhost", &self.vhost)
+        .field("heartbeat", &self.heartbeat)
+        .field("on_error", &self.on_error.is_some())
+        .finish()
+    }
 }
 
 #[derive(Debug)]
@@ -35,7 +49,7 @@ pub struct AmqpConnection {
 }
 
 impl AmqpConnection {
-    pub async fn connect(params: &AmqpConnectionParams) -> Result<AmqpConnection, AmqpConnectionError> {
+    pub async fn connect(params: AmqpConnectionParams) -> Result<AmqpConnection, AmqpConnectionError> {
         let result: AmqpConnection = AmqpConnection { ptr: Rc::new(AmqpConnectionInternal::new()) };
         result.ptr.connect(params, result.ptr.clone()).await?;
 
@@ -338,6 +352,7 @@ pub(super) struct AmqpConnectionInternal {
     max_channels: Cell<u16>,
     heartbeat: Cell<u16>,
     last_error: RefCell<Option<AmqpConnectionError>>,
+    on_error: RefCell<Option<Box<dyn Fn(AmqpConnectionError)>>>,
     pub buffers: Rc<BufferManager>,
 }
 
@@ -370,6 +385,7 @@ impl AmqpConnectionInternal {
             max_frame_size: Cell::new(4096),
             heartbeat: Cell::new(0),
             last_error: RefCell::new(None),
+            on_error: RefCell::new(None),
             buffers: Rc::new(BufferManager::new(4096, 10)),
         }
     }
@@ -462,10 +478,15 @@ impl AmqpConnectionInternal {
                     Some(channel) => channel.tx.send(Err(error.clone())),
                 }
             });
+
+            match &*self.on_error.borrow() {
+                None => (),
+                Some(callback) => callback(error),
+            }
         }
     }
 
-    async fn connect(&self, params: &AmqpConnectionParams, self_ptr: Rc<AmqpConnectionInternal>) -> Result<(), AmqpConnectionError> {
+    async fn connect(&self, mut params: AmqpConnectionParams, self_ptr: Rc<AmqpConnectionInternal>) -> Result<(), AmqpConnectionError> {
         let address = resolve_address(&params.address, Some(5672)).await?;
         let connected = async_connect(&self.fd, address).await;
         match connected {
@@ -540,6 +561,7 @@ impl AmqpConnectionInternal {
 
         let _ = reader.read_frame().await?;
 
+        *self.on_error.borrow_mut() = params.on_error.take();
         self.start_io_handler(writer, self.writer_queue.rx(), reader, self_ptr);
         Ok(())
     }
