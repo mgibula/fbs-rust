@@ -32,7 +32,7 @@ impl<T> TaskHandle<T> {
     pub fn is_completed(&self) -> bool {
         match &self.task {
             Some(task) => task.borrow().future.is_none(),
-            None => false,
+            None => true,
         }
     }
 
