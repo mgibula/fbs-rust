@@ -97,8 +97,7 @@ impl Executor {
                     },
                     Poll::Ready(()) => {
                         task.is_executable.set(false);
-                        task.waiters.borrow().iter().for_each(|w| w.wake_by_ref());
-                        task.waiters.borrow_mut().clear();
+                        task.waiters.take().into_iter().for_each(|w| w.wake());
                     },
                 }
             },
