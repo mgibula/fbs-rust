@@ -79,7 +79,7 @@ impl Executor {
         }
     }
 
-    fn process_task(&mut self, mut task: Rc<TaskData>) {
+    fn process_task(&mut self, task: Rc<TaskData>) {
         match (task.is_executable.get(), task.future.take()) {
             (false, _) => (),
             (true, None) => (),
