@@ -18,17 +18,19 @@ impl ExecutorFrontend {
             result_ptr_inner.set(Some(future.await));
         });
 
-        let task = Rc::new(RefCell::new(TaskData {
+        let task = Rc::new(TaskData {
             channel: self.channel.clone(),
-            future: Some(future),
-            wait_index: None,
-            waiters: vec![],
-        }));
+            future: Cell::new(Some(future)),
+            wait_index: Cell::new(None),
+            waiters: RefCell::new(Vec::with_capacity(1)),
+            is_executable: Cell::new(true),
+        });
 
         self.channel.send(ExecutorCmd::Schedule(task.clone()));
         TaskHandle {
             task: Some(task),
             result: result_ptr,
+            detached: false,
         }
     }
 

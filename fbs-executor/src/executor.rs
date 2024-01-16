@@ -1,5 +1,4 @@
 use std::collections::VecDeque;
-use std::cell::RefCell;
 use std::rc::Rc;
 use std::task::{Context, Poll};
 use std::fmt::{Debug, Formatter};
@@ -66,7 +65,7 @@ impl Executor {
             match cmd {
                 None => break,
                 Some(ExecutorCmd::Schedule(task)) => {
-                    let current_wait_index = task.borrow_mut().wait_index.take();
+                    let current_wait_index = task.wait_index.take();
                     if let Some(wait_index) = current_wait_index {
                         self.waiting.remove(wait_index);
                     }
@@ -80,30 +79,29 @@ impl Executor {
         }
     }
 
-    fn process_task(&mut self, task: Rc<RefCell<TaskData>>) {
-        let mut task_data = task.borrow_mut();
-        match task_data.future {
-            None => return,
-            Some(ref mut future) => {
+    fn process_task(&mut self, mut task: Rc<TaskData>) {
+        match (task.is_executable.get(), task.future.take()) {
+            (false, _) => (),
+            (true, None) => (),
+            (true, Some(mut future)) => {
                 let waker = super::task_data::task_into_waker(Rc::into_raw(task.clone()));
                 let mut context = Context::from_waker(&waker);
 
                 match future.as_mut().poll(&mut context) {
                     Poll::Pending => {
-                        let index = self.waiting.allocate();
-                        task_data.wait_index = Some(index);
+                        task.future.set(Some(future));
 
-                        drop(task_data);
+                        let index = self.waiting.allocate();
+                        task.wait_index.set(Some(index));
                         self.waiting.insert_at(index, task);
                     },
                     Poll::Ready(()) => {
-                        task_data.future = None;
-                        task_data.waiters.iter().for_each(|w| w.wake_by_ref());
-                        task_data.waiters.clear();
+                        task.is_executable.set(false);
+                        task.waiters.borrow().iter().for_each(|w| w.wake_by_ref());
+                        task.waiters.borrow_mut().clear();
                     },
                 }
-            }
+            },
         }
-
     }
 }

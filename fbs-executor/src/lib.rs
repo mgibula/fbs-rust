@@ -16,13 +16,13 @@ mod task_handle;
 pub use executor_frontend::Yield;
 
 enum ExecutorCmd {
-    Schedule(Rc<RefCell<TaskData>>),
+    Schedule(Rc<TaskData>),
     Wake(Waker),
 }
 
 pub struct Executor {
-    ready: VecDeque<Rc<RefCell<TaskData>>>,
-    waiting: IndexedList<Rc<RefCell<TaskData>>>,
+    ready: VecDeque<Rc<TaskData>>,
+    waiting: IndexedList<Rc<TaskData>>,
     channel: ChannelRx<ExecutorCmd>,
 }
 
@@ -32,12 +32,14 @@ pub struct ExecutorFrontend {
 
 pub struct TaskData {
     channel: ChannelTx<ExecutorCmd>,
-    future: Option<Pin<Box<dyn Future<Output = ()>>>>,
-    wait_index: Option<usize>,
-    waiters: Vec<Waker>,
+    future: Cell<Option<Pin<Box<dyn Future<Output = ()>>>>>,
+    wait_index: Cell<Option<usize>>,
+    waiters: RefCell<Vec<Waker>>,
+    is_executable: Cell<bool>,
 }
 
 pub struct TaskHandle<T> {
-    task: Option<Rc<RefCell<TaskData>>>,
+    task: Option<Rc<TaskData>>,
     result: Rc<Cell<Option<T>>>,
+    detached: bool,
 }

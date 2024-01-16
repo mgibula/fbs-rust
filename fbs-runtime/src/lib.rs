@@ -36,6 +36,7 @@ thread_local! {
     static COMPLETIONS: RefCell<Vec<Box<dyn FnOnce()>>> = RefCell::new(Vec::new());
 }
 
+#[must_use]
 pub fn async_spawn<T: 'static>(future: impl Future<Output = T> + 'static) -> TaskHandle<T>  {
     FRONTEND.with(|e| {
         e.spawn(future)
@@ -497,7 +498,7 @@ mod tests {
                 called.set(true);
             });
 
-            async_cancel(token).await;
+            let _ = async_cancel(token).await;
             1
         });
 
@@ -670,7 +671,7 @@ mod tests {
                 called.set(true);
             });
 
-            async_sleep_update(token, std::time::Duration::new(0, 1_000_000)).await;
+            let _ = async_sleep_update(token, std::time::Duration::new(0, 1_000_000)).await;
 
             1
         });
@@ -686,35 +687,33 @@ mod tests {
 
     #[test]
     fn local_poll_df() {
-        use std::time::SystemTime;
         use fbs_library::pipe::*;
 
         let called = Rc::new(Cell::new(false));
         let called_orig = called.clone();
         let (rx, tx) = pipe(PipeFlags::default()).unwrap();
 
-        let now = SystemTime::now();
         async_run(async move {
             let called = called.clone();
             async_spawn(async move {
                 let mut data = vec![];
                 data.extend_from_slice(b"test");
 
-                async_poll(&tx, PollMask::default().write(true)).await;
-                async_write(&tx, data, None).await;
+                let _ = async_poll(&tx, PollMask::default().write(true)).await;
+                let _ = async_write(&tx, data, None).await;
 
                 1
-            });
+            }).detach();
 
             async_spawn(async move {
-                async_poll(&rx, PollMask::default().read(true)).await;
+                let _ = async_poll(&rx, PollMask::default().read(true)).await;
 
-                let mut buffer = Vec::with_capacity(10);
+                let buffer = Vec::with_capacity(10);
                 let result = async_read_into(&rx, buffer, None).await.unwrap();
                 called.set(true);
 
                 assert_eq!(result, b"test");
-            });
+            }).detach();
         });
 
         assert_eq!(called_orig.get(), true);

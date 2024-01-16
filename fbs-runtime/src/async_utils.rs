@@ -242,14 +242,14 @@ mod test {
     #[test]
     fn async_channel_test() {
         async_run(async {
-            let (mut rx1, tx1) = async_channel_create::<i32>();
-            let (mut rx2, tx2) = async_channel_create::<i32>();
+            let (rx1, tx1) = async_channel_create::<i32>();
+            let (rx2, tx2) = async_channel_create::<i32>();
 
             async_spawn(async move {
                 let mut value = rx1.receive().await;
                 value += 1;
                 tx2.send(value);
-            });
+            }).detach();
 
             let result = async_spawn(async move {
                 tx1.send(1);
@@ -263,7 +263,7 @@ mod test {
     #[test]
     fn async_signal_test() {
         async_run(async {
-            let (mut rx1, tx1) = async_channel_create::<i32>();
+            let (rx1, tx1) = async_channel_create::<i32>();
             let tx2 = tx1.clone();
             let sig1 = AsyncSignal::new();
             let sig1cpy = sig1.clone();
@@ -277,7 +277,7 @@ mod test {
 
                 tx1.send(1);
                 sig2cpy.signal();
-            });
+            }).detach();
 
             async_spawn(async move {
                 tx2.send(2);
@@ -287,7 +287,7 @@ mod test {
 
                 sig2.wait().await;
                 tx2.send(3);
-            });
+            }).detach();
 
             let v1 = rx1.receive().await;
             let v2 = rx1.receive().await;
@@ -302,7 +302,7 @@ mod test {
     #[test]
     fn async_signal_mt_test() {
         async_run(async {
-            let (mut rx1, tx1) = async_channel_create::<i32>();
+            let (rx1, tx1) = async_channel_create::<i32>();
             let tx2 = tx1.clone();
             let sig1 = AsyncSignalMT::new().unwrap();
             let sig1cpy = sig1.trigger();
@@ -315,7 +315,7 @@ mod test {
 
                 tx1.send(1);
                 sig2cpy.signal();
-            });
+            }).detach();
 
             async_spawn(async move {
                 tx2.send(2);
@@ -324,7 +324,7 @@ mod test {
 
                 sig2.wait().await;
                 tx2.send(3);
-            });
+            }).detach();
 
             let v1 = rx1.receive().await;
             let v2 = rx1.receive().await;
