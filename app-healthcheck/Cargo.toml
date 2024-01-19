@@ -7,3 +7,6 @@ edition = "2021"
 
 [dependencies]
 fbs-application = { path = "../fbs-application" }
+fbs-amqp = { path = "../fbs-amqp" }
+fbs-executor = { path = "../fbs-executor" }
+fbs-runtime = { path = "../fbs-runtime" }

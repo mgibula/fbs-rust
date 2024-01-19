@@ -1,5 +1,8 @@
 use std::marker::PhantomData;
+use std::cell::Cell;
+use std::rc::Rc;
 
+use fbs_library::update_cell;
 use fbs_runtime::*;
 use fbs_runtime::async_utils::*;
 use fbs_runtime::async_run;
@@ -7,15 +10,26 @@ use fbs_executor::TaskHandle;
 use fbs_library::sigset::*;
 use fbs_library::signalfd::*;
 
+pub trait ApplicationResource {
+    fn ping(&mut self) -> bool;
+}
+
+pub enum EventProcessing {
+    Completed,
+    Retry,
+}
+
 pub trait ApplicationLogic : Sized + 'static {
     type Event;
     type Error;
 
-    fn create() -> Result<Self, Self::Error>;
+    fn create(notifier: ApplicationStateNotifier) -> Result<Self, Self::Error>;
 
     fn handle_system_event(&mut self, event: SystemEvent);
 
-    fn handle_app_event(&mut self, state: &mut ApplicationState<Self::Event>, event: Self::Event);
+    async fn handle_app_event(&mut self, notifier: ApplicationStateNotifier, event: Self::Event) -> EventProcessing;
+
+    fn get_resources(&mut self) -> Vec<&mut dyn ApplicationResource>;
 }
 
 pub struct Application<T: ApplicationLogic> {
@@ -28,14 +42,16 @@ impl<T: ApplicationLogic> Application<T> {
     }
 
     pub fn run(&mut self) -> Result<(), T::Error> {
-        let mut app = Box::new(T::create()?);
-        let mut state = Box::new(ApplicationState::<T::Event>::new());
+        let state = Rc::new(ApplicationState::<T::Event>::new());
+        let state_int = state.clone();
 
-        let mut notifier = state.create_notifier();
+        let mut app = Rc::new(T::create(state.create_notifier())?);
+
+        let notifier = state.create_notifier();
         notifier.send_system_event(SystemEvent::ApplicationInit);
 
         async_run(async move {
-            state.signal_coro = async_spawn(async move {
+            state.signal_proc.set(async_spawn(async move {
                 let mut mask = SignalSet::empty();
                 mask.add(Signal::SIGINT);
                 mask.add(Signal::SIGQUIT);
@@ -55,15 +71,23 @@ impl<T: ApplicationLogic> Application<T> {
                         }
                     }
                 }
-            });
+            }));
 
-            async_spawn(async move {
+            state.main_proc.set(async_spawn(async move {
                 loop {
-                    state.has_event.wait().await;
+                    state_int.has_event.wait().await;
 
-                    if !state.internal_queue_rx.is_empty() {
-                        let event = state.internal_queue_rx.receive().await;
-                        let running = state.handle_system_event(event);
+                    let mut resources = app.get_resources();
+                    resources.iter_mut().for_each(|r| {
+                        eprintln!("ping");
+                        r.ping();
+                    });
+
+                    drop(resources);
+
+                    if !state_int.internal_queue_rx.is_empty() {
+                        let event = state_int.internal_queue_rx.receive().await;
+                        let running = state_int.handle_system_event(event);
                         if !running {
                             break;
                         }
@@ -71,16 +95,21 @@ impl<T: ApplicationLogic> Application<T> {
                         continue;
                     }
 
-                    if !state.app_queue_rx.is_empty() {
-                        let event = state.app_queue_rx.receive().await;
-                        app.handle_app_event(state.as_mut(), event);
+                    if !state_int.app_queue_rx.is_empty() {
+                        let event = state_int.app_queue_rx.receive().await;
+
+                        let state = state_int.clone();
+                        async_spawn(async move {
+                            let a = app.handle_app_event(state.create_notifier(), event).await;
+
+                        });
 
                         continue;
                     }
                 }
 
-                state.signal_coro.cancel();
-            });
+                update_cell(&state_int.signal_proc, |signal| { signal.cancel(); TaskHandle::default() });
+            }));
         });
 
         Ok(())
@@ -92,15 +121,17 @@ pub enum SystemEvent {
     ApplicationInit,
     ApplicationQuit,
     ApplicationSignal(Signal),
+    ResourceStateChanged,
 }
 
-struct ApplicationStateNotifier {
+#[derive(Clone)]
+pub struct ApplicationStateNotifier {
     internal_queue_tx: AsyncChannelTx<SystemEvent>,
     notifier: AsyncSignal,
 }
 
 impl ApplicationStateNotifier {
-    fn send_system_event(&mut self, event: SystemEvent) {
+    pub fn send_system_event(&self, event: SystemEvent) {
         self.internal_queue_tx.send(event);
         self.notifier.signal();
     }
@@ -112,7 +143,8 @@ pub struct ApplicationState<T> {
     app_queue_rx: AsyncChannelRx<T>,
     app_queue_tx: AsyncChannelTx<T>,
     has_event: AsyncSignal,
-    signal_coro: TaskHandle<()>,
+    signal_proc: Cell<TaskHandle<()>>,
+    main_proc: Cell<TaskHandle<()>>,
 }
 
 impl<T> ApplicationState<T> {
@@ -126,18 +158,19 @@ impl<T> ApplicationState<T> {
             app_queue_tx: app_tx,
             app_queue_rx: app_rx,
             has_event: AsyncSignal::new(),
-            signal_coro: TaskHandle::default(),
+            signal_proc: Cell::new(TaskHandle::default()),
+            main_proc: Cell::new(TaskHandle::default()),
         }
     }
 
-    fn create_notifier(&mut self) -> ApplicationStateNotifier {
+    fn create_notifier(&self) -> ApplicationStateNotifier {
         ApplicationStateNotifier {
             internal_queue_tx: self.internal_queue_tx.clone(),
             notifier: self.has_event.clone(),
         }
     }
 
-    fn handle_system_event(&mut self, event: SystemEvent) -> bool {
+    fn handle_system_event(&self, event: SystemEvent) -> bool {
         eprintln!("System event - {:?}", event);
         match event {
             SystemEvent::ApplicationQuit => return false,
